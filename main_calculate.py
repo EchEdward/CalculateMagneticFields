@@ -1,4 +1,7 @@
 import numpy as np
+import torch
+from threading import Thread
+from queue import Queue
 from time import time
 import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable
@@ -232,6 +235,36 @@ def MagnetikVoltage(I,cordinates,dl,x,y,z):
                     rez[1] if not np.isnan(rez[1]) else I,\
                     rez[2] if not np.isnan(rez[2]) else I,],dtype=np.float64)
 
+def MagnetikVoltageTorch(device,I,cordinates,dl,x,y,z,alfs,qu,H_area):
+    """
+    Расчёт напряжённости от одного проводника\n
+    I - ток в расматриваем проводнике\n
+    cordinates - координаты элементрных участков проводника\n
+    dl - длинна элементарных участков\n
+    x,y,z - координаты точки в которой определяем напряжённость поля\n
+    """
+    while True:
+        task_for, k, obj = qu.get()
+
+        if task_for is None and k is None and obj is None:
+            break
+
+        t = dl[obj].size()[0]
+        point = torch.tensor([x[k],y[k],z],dtype=torch.float32).to(device)
+        rv = (point - cordinates[obj])[:t,:]
+        r = 1/(4*np.pi*torch.norm(rv,dim=1)**3)
+        r = torch.reshape(r, (t,1))
+        dH = torch.cross(dl[obj], rv)*r
+        rez = torch.sum(dH,dim=0)*I[obj]
+        trig = torch.isnan(rez)
+        rt = torch.tensor([rez[0] if not trig[0] else I,\
+                            rez[1] if not trig[1] else I,\
+                            rez[2] if not trig[2] else I,],dtype=torch.float32).numpy()*alfs[obj]
+        
+        H_area[k,:] += rt
+    
+    #return rt
+
 
 def MutualInduct(cordinates_1,dl_1,cordinates_2,dl_2):
     """
@@ -392,21 +425,52 @@ def run_area_calc(tp,lst, area, hz, step, DL, deg):
         col = int((area[2]-area[0])/step)+1
         row = int((area[3]-area[1])/step)+1
 
-        H_area = np.zeros(row*col,dtype=np.float64)
-        X = np.zeros(row*col,dtype=np.float64)
-        Y = np.zeros(row*col,dtype=np.float64)
-        
+        #H_area = np.zeros(row*col,dtype=np.float32)
+        H_area = np.zeros((row*col,3),dtype=np.complex64)
+        X = np.zeros(row*col,dtype=np.float32)
+        Y = np.zeros(row*col,dtype=np.float32)
+
+        device = torch.cuda.current_device()
+        crd1 = []
+        ddllss1 = []
+        crd2 = []
+        ddllss2 = []
+        for obj in range(len(dls)):
+            crd1.append(torch.from_numpy(cordinates[obj]))
+            ddllss1.append(torch.from_numpy(dls[obj]))
+            crd2.append(crd1[obj].to(device))
+            ddllss2.append(ddllss1[obj].to(device))
+
+        qu = Queue()
+
+                
         k=0
         for i in range(row):
             for j in range(col):
                 X[k] =j*step+area[0]
                 Y[k] =i*step+area[1]
-                H_point = np.zeros(3,dtype=np.complex128)
-                for obj in range(len(dls)):
-                    H_point += MagnetikVoltage(Is[obj],cordinates[obj], dls[obj],X[k],Y[k],hz[0])*alfs[obj]
-                H_area[k] = np.linalg.norm(H_point)
-                k+=1
 
+                for obj in range(len(dls)):
+                    qu.put(("all",k,obj))
+                k+=1
+        
+        qu.put((None,None,None))
+        qu.put((None,None,None))
+
+        p1 = Thread(target=MagnetikVoltageTorch, args = ("cpu",Is, crd1, ddllss1, X,Y,hz[0],alfs,qu,H_area))
+        p2 = Thread(target=MagnetikVoltageTorch, args = (device,Is, crd2, ddllss2, X,Y,hz[0],alfs,qu,H_area))
+        p1.start()
+        p2.start()
+        p1.join()
+        p2.join()
+
+        """ k = len(crd)-1
+        while k>-1:
+            del crd[k]
+            del ddllss[k]
+            k-=1
+        torch.cuda.empty_cache() """
+        H_area = np.linalg.norm(H_area,axis=1)
         return (X,Y), H_area
 
         
@@ -450,10 +514,11 @@ def run_area_calc(tp,lst, area, hz, step, DL, deg):
     
 
 if __name__ == '__main__':
-    cordinates_1,dl_1 = provod(0,0,  0, 1,0,  0,1000)
-    cordinates_2,dl_2 = provod(0,0.1,0, 1,0.1,0,1000)
+    #cordinates_1,dl_1 = provod(0,0,  0, 1,0,  0,1000)
+    #cordinates_2,dl_2 = provod(0,0.1,0, 1,0.1,0,1000)
+    cordinates_1,dl_1 = Solinoid1(0,0,1.33,1.1175,1.115,1400,14,0.024,1)
 
-    print(MutualInduct(cordinates_1,dl_1,cordinates_2,dl_2))
+    #print(MutualInduct(cordinates_1,dl_1,cordinates_2,dl_2))
     print(SameInduct(cordinates_1,dl_1))
 
 
