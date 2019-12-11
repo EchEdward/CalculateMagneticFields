@@ -7,6 +7,11 @@ import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable
 import scipy.interpolate
 from scipy.optimize import fsolve,broyden1
+from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
+
+nvmlInit()
+
+cuda_was_used = False
 
 
 alf1=np.cos(240*np.pi/180)+1j*np.sin(240*np.pi/180)
@@ -14,6 +19,46 @@ alf2=np.cos(120*np.pi/180)+1j*np.sin(120*np.pi/180)
 
 alf3=np.cos(0*np.pi/180)+1j*np.sin(0*np.pi/180)
 alf4=np.cos(180*np.pi/180)+1j*np.sin(180*np.pi/180)
+
+def check_memory():
+    device = torch.cuda.current_device()
+    h = nvmlDeviceGetHandleByIndex(0)
+    info = nvmlDeviceGetMemoryInfo(h)
+
+    use_mr = torch.cuda.memory_allocated(device)
+    reserv_mr = torch.cuda.memory_cached(device)
+
+    print(f'nvidia_total    : {info.total}')
+    print(f'nvidia_free     : {info.free}')
+    print(f'nvidia_used     : {info.used}')
+    print('use_memory_for_tensors: ',use_mr)
+    print('reserved_memory       : ',reserv_mr)
+    print("-"*10)
+
+def distribution_memory(dl, cord):
+    global cuda_was_used
+    device = torch.cuda.current_device()
+    h = nvmlDeviceGetHandleByIndex(0)
+    info = nvmlDeviceGetMemoryInfo(h)
+
+    busy_memory = torch.cuda.memory_allocated(device)
+    reserv_memory = torch.cuda.memory_cached(device)
+
+    free_memory = info.free + reserv_memory - busy_memory
+    if not cuda_was_used:
+        free_memory-=252*1024**2
+        cuda_was_used = True
+   
+    Trig = []
+    used_memory = 0
+    for obj in range(len(dl)):
+        used_memory += dl[obj].nbytes+cord[obj].nbytes
+        Trig.append(free_memory > used_memory)
+
+    print("free memory: ",(free_memory-used_memory)/1024**2)
+
+    return Trig
+
 
 def VHLine(x1,y1,x2,y2,l,r):
     """ Получение близких к граничным координат на линии """  
@@ -107,8 +152,8 @@ def Solinoid1(x,y,z,r,h,n,m,l,dalf):
     ri=[r-i*l for i in range(m)]
     ri.reverse()
     #print(ri)
-    cordinates = np.zeros((t,3),dtype=np.float64)
-    dl = np.zeros((t-1,3),dtype=np.float64)
+    cordinates = np.zeros((t,3),dtype=np.float32)
+    dl = np.zeros((t-1,3),dtype=np.float32)
 
     k=-1
     for i in range(m):
@@ -149,8 +194,8 @@ def Solinoid(x,y,z,r,h,n,t):
     """
     # 
     t = int(360/t*n)
-    cordinates = np.zeros((t,3),dtype=np.float64)
-    dl = np.zeros((t-1,3),dtype=np.float64)
+    cordinates = np.zeros((t,3),dtype=np.float32)
+    dl = np.zeros((t-1,3),dtype=np.float32)
     
     for i in range(t):
         cordinates[i][0] = r*np.cos(2*np.pi*i*n/t)+x
@@ -187,8 +232,8 @@ def Line(points,DL, fmax = None):
     st = [int(i/DL) for i in dist]
 
     t = sum(st)+1
-    cordinates = np.zeros((t,3),dtype=np.float64)
-    dl = np.zeros((t-1,3),dtype=np.float64)
+    cordinates = np.zeros((t,3),dtype=np.float32)
+    dl = np.zeros((t-1,3),dtype=np.float32)
 
     k = -1
     for i in range(len(st)):
@@ -315,8 +360,8 @@ def provod(xn,yn,zn,xk,yk,zk,t):
     dy = (yk-yn)/(t-1)
     dz = (zk-zn)/(t-1)
 
-    cordinates = np.zeros((t,3),dtype=np.float64)
-    dl = np.zeros((t-1,3),dtype=np.float64)
+    cordinates = np.zeros((t,3),dtype=np.float32)
+    dl = np.zeros((t-1,3),dtype=np.float32)
 
     cordinates[0][0] = xn
     cordinates[0][1] = yn
@@ -430,12 +475,21 @@ def run_area_calc(tp,lst, area, hz, step, DL, deg):
         X = np.zeros(row*col,dtype=np.float32)
         Y = np.zeros(row*col,dtype=np.float32)
 
+        #check_memory()
+
         device = torch.cuda.current_device()
+
+        #required_memory = sum([cordinates[obj].nbytes+dls[obj].nbytes for obj in range(len(dls))])
+        #print("required_memory " ,required_memory)
+
+        print(distribution_memory(dls, cordinates))
+
         crd1 = []
         ddllss1 = []
         crd2 = []
         ddllss2 = []
         for obj in range(len(dls)):
+            #print(cordinates[obj].dtype)
             crd1.append(torch.from_numpy(cordinates[obj]))
             ddllss1.append(torch.from_numpy(dls[obj]))
             crd2.append(crd1[obj].to(device))
@@ -443,6 +497,7 @@ def run_area_calc(tp,lst, area, hz, step, DL, deg):
 
         qu = Queue()
 
+        #check_memory()
                 
         k=0
         for i in range(row):
@@ -464,12 +519,15 @@ def run_area_calc(tp,lst, area, hz, step, DL, deg):
         p1.join()
         p2.join()
 
-        """ k = len(crd)-1
+        k = len(crd2)-1
         while k>-1:
-            del crd[k]
-            del ddllss[k]
+            del crd2[k]
+            del ddllss2[k]
             k-=1
-        torch.cuda.empty_cache() """
+
+        #check_memory()
+
+        #torch.cuda.empty_cache()
         H_area = np.linalg.norm(H_area,axis=1)
         return (X,Y), H_area
 
