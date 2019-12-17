@@ -1,17 +1,52 @@
 import numpy as np
 import torch
 from threading import Thread
-from queue import Queue
+from queue import Queue, LifoQueue
 from time import time
 import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable
 import scipy.interpolate
 from scipy.optimize import fsolve,broyden1
 from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
+import sys
 
-nvmlInit()
+def Cuda_Memory_Control():
+    # Check how cuda do control memory
+    try:
+        nvmlInit()
+        device = torch.cuda.current_device()
+        h = nvmlDeviceGetHandleByIndex(0)
+        info_1 = nvmlDeviceGetMemoryInfo(h)
 
-cuda_was_used = False
+        t = torch.ones(1,dtype=torch.float32,device=device)
+        t_size_2 = torch.cuda.memory_allocated(device)
+        reserv_mr_2 = torch.cuda.memory_cached(device)
+
+        info_2 = nvmlDeviceGetMemoryInfo(h)
+
+        del t
+
+        t_size_3 = torch.cuda.memory_allocated(device)
+        reserv_mr_3 = torch.cuda.memory_cached(device)
+        info_3 = nvmlDeviceGetMemoryInfo(h)
+
+        const_memory = info_1.free - info_2.free - t_size_2 - reserv_mr_2
+        check_free_memory = info_3.free - info_2.free #- reserv_mr_3 - t_size_3
+
+        if check_free_memory*0.95 <= const_memory <= check_free_memory*1.05:
+            # Memory will clear after finish calculate
+            result = (const_memory, False)
+        else:
+            # Memory won't clear after finish calculate
+            result = (const_memory, True)
+
+    except Exception:
+        # Other problem when you can't use cuda
+        result = (0, None)
+
+    return result
+
+cuda_memory_control = Cuda_Memory_Control()
 
 
 alf1=np.cos(240*np.pi/180)+1j*np.sin(240*np.pi/180)
@@ -35,8 +70,7 @@ def check_memory():
     print('reserved_memory       : ',reserv_mr)
     print("-"*10)
 
-def distribution_memory(dl, cord):
-    global cuda_was_used
+def distribution_memory(arr,start=0,coef=1):
     device = torch.cuda.current_device()
     h = nvmlDeviceGetHandleByIndex(0)
     info = nvmlDeviceGetMemoryInfo(h)
@@ -45,17 +79,33 @@ def distribution_memory(dl, cord):
     reserv_memory = torch.cuda.memory_cached(device)
 
     free_memory = info.free + reserv_memory - busy_memory
-    if not cuda_was_used:
-        free_memory-=252*1024**2
-        cuda_was_used = True
+
+    if cuda_memory_control[1] is not None  and not cuda_memory_control[1]:
+        free_memory-=cuda_memory_control[1]
+
+    #free_memory -= 220/1024**2
    
     Trig = []
+    stp = []
     used_memory = 0
-    for obj in range(len(dl)):
-        used_memory += dl[obj].nbytes+cord[obj].nbytes
-        Trig.append(free_memory > used_memory)
 
-    print("free memory: ",(free_memory-used_memory)/1024**2)
+    cols = len(arr)
+    rows = len(arr[0])
+
+    for i in range(start,rows):
+        for j in range(cols):
+            if type(arr[j][i]) == np.ndarray:
+                used_memory += arr[j][i].nbytes
+            elif type(arr[j][i]) == torch.Tensor:
+                used_memory += arr[j][i].numpy().nbytes #sys.getsizeof(arr[j][i].storage())
+        if i == start:
+            used_memory *= coef
+        Trig.append(free_memory > used_memory)
+        stp.append(used_memory/1024**2)
+                
+    print("free memory: ",(free_memory)/1024**2)
+    print(Trig)
+    print(stp)
 
     return Trig
 
@@ -280,7 +330,130 @@ def MagnetikVoltage(I,cordinates,dl,x,y,z):
                     rez[1] if not np.isnan(rez[1]) else I,\
                     rez[2] if not np.isnan(rez[2]) else I,],dtype=np.float64)
 
-def MagnetikVoltageTorch(device,I,cordinates,dl,x,y,z,alfs,qu,H_area):
+def Paralel_calk(tsk,tensors_list,common_list,number_of_tasks,coef_mmr,qu_cpu,qu_gpu,Result):
+    while True:
+        if tsk != "cpu":
+            task_Trig, k, obj = qu_gpu.get()
+            if task_Trig == "Start":
+                if torch.cuda.is_available():
+                    device = torch.cuda.current_device()
+                    free_mmr = distribution_memory(tensors_list,coef=coef_mmr)
+
+                    objs = len(free_mmr)
+                    tensors_list_gpu = [[None for i in range(objs)] for j in range(len(tensors_list))]
+                    re = -1
+
+                    for i in range(objs):
+                        re += 1
+                        if free_mmr[i]:
+                            for j in range(len(tensors_list)):
+                                tensors_list_gpu[j][i] = tensors_list[j][i].to(device)
+                        else:
+                            break
+                    else:
+                        re+=1
+
+                    if re == objs:
+                        qu_gpu.put(("End",None,None))
+                        qu_cpu.put(("End",None,None))
+
+                        for i in range(number_of_tasks):
+                            for j in range(objs):
+                                qu_gpu.put(("Work",i,j))
+                    
+                    elif re == 0:
+                        qu_gpu.put(("End",None,None))
+                        qu_cpu.put(("End",None,None))
+
+                        for i in range(number_of_tasks):
+                            for j in range(objs):
+                                qu_cpu.put(("Work",i,j))
+
+                    elif 0 < re < objs:
+                        qu_gpu.put(("Rewrite",None,None))
+                        qu_cpu.put(("End",None,None))
+
+                        for i in range(number_of_tasks):
+                            for j in range(objs):
+                                if j < re:
+                                    qu_gpu.put(("Work",i,j))
+                                else:
+                                    qu_cpu.put(("Work",i,j))
+
+                else:
+                    qu_gpu.put(("End",None,None))
+                    qu_cpu.put(("End",None,None))
+
+                    for i in range(number_of_tasks):
+                        for j in range(objs):
+                            qu_cpu.put(("Work",i,j))
+
+            if task_Trig == "Rewrite":
+                tensors_list_gpu = [[None for i in range(objs)] for j in range(len(tensors_list))]
+
+                free_mmr = distribution_memory(tensors_list,start=re, coef=coef_mmr)
+
+                start = re
+                re -= 1
+                
+                for i in range(start,objs):
+                    re += 1
+                    if free_mmr[i-start]:
+                        for j in range(len(tensors_list)):
+                            tensors_list_gpu[j][i] = tensors_list[j][i].to(device)
+                    else:
+                        break
+                else:
+                    re+=1
+
+                tasks = []
+
+                if re <= objs:
+                    if qu_cpu.qsize() != 0:
+                        while True:
+                            g = qu_cpu.get()
+                            if g[0] == "End":
+                                break
+                            tasks.append(g)
+
+                        if re == objs:
+                            qu_gpu.put(("End",None,None))
+                            qu_cpu.put(("End",None,None))
+
+                            for i in tasks:
+                                qu_gpu.put(i)
+                        else:
+                            qu_gpu.put(("Rewrite",None,None))
+                            qu_cpu.put(("End",None,None))
+
+                            for i in tasks:
+                                if i[2]>=re:
+                                    qu_cpu.put(i)
+                                else:
+                                    qu_cpu.put(i)
+                    else:
+                        qu_gpu.put(("End",None,None))
+                    
+            elif task_Trig == "End" :
+                break
+
+            elif task_Trig == "Work":
+                Result[k,:] += MagnetikVoltageTorch(tensors_list_gpu,common_list,k,obj,device)
+                
+        else:
+            task_Trig, k, obj = qu_cpu.get()
+
+            if task_Trig == "End":
+                break
+            if task_Trig == "Work":
+                Result[k,:] += MagnetikVoltageTorch(tensors_list,common_list,k,obj,"cpu")
+            
+            
+
+
+def MagnetikVoltageTorch(tensor_list,common_list,k,obj,device):
+    x,y,z,alfs,I = common_list
+    cordinates, dl = tensor_list
     """
     Расчёт напряжённости от одного проводника\n
     I - ток в расматриваем проводнике\n
@@ -288,27 +461,19 @@ def MagnetikVoltageTorch(device,I,cordinates,dl,x,y,z,alfs,qu,H_area):
     dl - длинна элементарных участков\n
     x,y,z - координаты точки в которой определяем напряжённость поля\n
     """
-    while True:
-        task_for, k, obj = qu.get()
+    t = dl[obj].size()[0]
+    point = torch.tensor([x[k],y[k],z],dtype=torch.float32).to(device)
+    rv = (point - cordinates[obj])[:t,:]
+    r = 1/(4*np.pi*torch.norm(rv,dim=1)**3)
+    r = torch.reshape(r, (t,1))
+    dH = torch.cross(dl[obj], rv)*r
+    rez = torch.sum(dH,dim=0)*I[obj]
+    trig = torch.isnan(rez)
+    rt = torch.tensor([rez[0] if not trig[0] else I,\
+                        rez[1] if not trig[1] else I,\
+                        rez[2] if not trig[2] else I,],dtype=torch.float32).numpy()*alfs[obj]
 
-        if task_for is None and k is None and obj is None:
-            break
-
-        t = dl[obj].size()[0]
-        point = torch.tensor([x[k],y[k],z],dtype=torch.float32).to(device)
-        rv = (point - cordinates[obj])[:t,:]
-        r = 1/(4*np.pi*torch.norm(rv,dim=1)**3)
-        r = torch.reshape(r, (t,1))
-        dH = torch.cross(dl[obj], rv)*r
-        rez = torch.sum(dH,dim=0)*I[obj]
-        trig = torch.isnan(rez)
-        rt = torch.tensor([rez[0] if not trig[0] else I,\
-                            rez[1] if not trig[1] else I,\
-                            rez[2] if not trig[2] else I,],dtype=torch.float32).numpy()*alfs[obj]
-        
-        H_area[k,:] += rt
-    
-    #return rt
+    return rt
 
 
 def MutualInduct(cordinates_1,dl_1,cordinates_2,dl_2):
@@ -475,59 +640,31 @@ def run_area_calc(tp,lst, area, hz, step, DL, deg):
         X = np.zeros(row*col,dtype=np.float32)
         Y = np.zeros(row*col,dtype=np.float32)
 
-        #check_memory()
 
-        device = torch.cuda.current_device()
-
-        #required_memory = sum([cordinates[obj].nbytes+dls[obj].nbytes for obj in range(len(dls))])
-        #print("required_memory " ,required_memory)
-
-        print(distribution_memory(dls, cordinates))
-
-        crd1 = []
-        ddllss1 = []
-        crd2 = []
-        ddllss2 = []
         for obj in range(len(dls)):
-            #print(cordinates[obj].dtype)
-            crd1.append(torch.from_numpy(cordinates[obj]))
-            ddllss1.append(torch.from_numpy(dls[obj]))
-            crd2.append(crd1[obj].to(device))
-            ddllss2.append(ddllss1[obj].to(device))
+            cordinates[obj] = torch.from_numpy(cordinates[obj])
+            dls[obj] = torch.from_numpy(dls[obj])
 
-        qu = Queue()
 
-        #check_memory()
+        qu_cpu = LifoQueue()
+        qu_gpu = LifoQueue()
+        qu_gpu.put(("Start",None,None))
                 
         k=0
         for i in range(row):
             for j in range(col):
                 X[k] =j*step+area[0]
                 Y[k] =i*step+area[1]
-
-                for obj in range(len(dls)):
-                    qu.put(("all",k,obj))
                 k+=1
-        
-        qu.put((None,None,None))
-        qu.put((None,None,None))
 
-        p1 = Thread(target=MagnetikVoltageTorch, args = ("cpu",Is, crd1, ddllss1, X,Y,hz[0],alfs,qu,H_area))
-        p2 = Thread(target=MagnetikVoltageTorch, args = (device,Is, crd2, ddllss2, X,Y,hz[0],alfs,qu,H_area))
+        p1 = Thread(target=Paralel_calk, args = ("cpu", [cordinates, dls], [X,Y,hz[0],alfs,Is], k, 2.2, qu_cpu, qu_gpu, H_area))
+        p2 = Thread(target=Paralel_calk, args = ('gpu', [cordinates, dls], [X,Y,hz[0],alfs,Is], k, 2.2, qu_cpu, qu_gpu, H_area))
         p1.start()
         p2.start()
         p1.join()
         p2.join()
 
-        k = len(crd2)-1
-        while k>-1:
-            del crd2[k]
-            del ddllss2[k]
-            k-=1
 
-        #check_memory()
-
-        #torch.cuda.empty_cache()
         H_area = np.linalg.norm(H_area,axis=1)
         return (X,Y), H_area
 
