@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import QMainWindow, QWidget, QGraphicsScene, QGraphicsView,
      QPushButton, QGridLayout, QApplication, QVBoxLayout, QHBoxLayout, QGraphicsEllipseItem, QGraphicsItem,\
      QGraphicsItemGroup,QGraphicsSceneMouseEvent, QListView, QSplitter, QFrame, QSizePolicy, QTreeView,\
      QHeaderView, QCheckBox, QComboBox, QFileDialog, QTabWidget, QTableWidget, QSpinBox, QLabel, QTableWidgetItem,\
-     QColorDialog
+     QColorDialog, QProgressDialog
 from PyQt5.QtCore import Qt, QPoint, QLineF,QPointF, QEvent, QPersistentModelIndex, QModelIndex
 
 from DrawObjects import GraphicsCircleItem,GraphicsLineItem,GraphicsPolylineItem, GraphicsRectItem, OneCalcCircle
@@ -559,6 +559,7 @@ class Screen(QMainWindow):
             print(ex)
 
     def ShowCanvas(self,SpaceCord,H_area,area_calc,z,tp, tc=None):
+        H_area = np.linalg.norm(H_area,axis=1)
         self.fig.clear()
         sp_levels = []
      
@@ -666,7 +667,16 @@ class Screen(QMainWindow):
 
             self.Canv.draw() # Выводим график в виджет
 
-            self.tab.setCurrentIndex(1) 
+            self.tab.setCurrentIndex(1)
+
+    def ProgresCalc(self):
+        Ind = QProgressDialog('Производится расчёт','Отмена', 0, 0, self)
+        Ind.setWindowTitle('Расчет ')
+        Ind.setMinimumDuration(0)
+        Ind.setWindowModality(Qt.WindowModal)
+        Ind.setAutoClose(True)
+        Ind.show()
+        return Ind
         
 
 
@@ -732,8 +742,9 @@ class Screen(QMainWindow):
                 
 
                 if (tp == "H_calc_area" or tp == "V_calc_area") and tc is None:
-                    SpaceCord, H_area = run_area_calc(tp,lst,area_calc,z,dg,dl,da)
-                    self.ShowCanvas(SpaceCord,H_area,area_calc,z,tp)
+                    self.Ind = self.ProgresCalc()
+                    run_area_calc(tp,lst,area_calc,z,dg,dl,da, callback_func = (lambda S, H :self.ShowCanvas(S,H,area_calc,z,tp),self.Ind))
+                    
                 
                 elif tp == "O_calc_point" and tc is None:
                     self.calcObjectsDict[j][3].menu.data["result"] = run_area_calc(tp,lst,area_calc,z,dg,dl,da)

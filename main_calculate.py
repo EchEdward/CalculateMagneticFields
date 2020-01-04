@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from threading import Thread
+from threading import Thread, Event
 from queue import Queue, LifoQueue
 from time import time
 import matplotlib.pyplot as plt
@@ -231,6 +231,78 @@ def Solinoid1(x,y,z,r,h,n,m,l,dalf):
     return cordinates, dl
 
 
+def Solinoid1Torch(x,y,z,r,h,n,m,l,dalf,dp=None):
+    """
+    Построение координат элементарных участков соленойда\n
+    x,y,z, - координаты отсчёта построения соленойда\n
+    r - внешний радиус соленойда\n
+    h - высота соленойда\n
+    n - количество витков в соленойде\n
+    m - количество слоёв соленойде\n
+    l - растояние между слоями\n
+    dalf - угловая длинна элементарного участка\n
+    """
+    tvr = int(h//(np.deg2rad(dalf)*r))+2
+    ns = [int((n-(n%m))/(m-(0 if n%m==0 else 1))) if i!=m-1 else n//m for i in range(m)]
+    ti = [int(360/dalf*i)+1 for i in ns]
+    t = sum(ti)+(m-1)*tvr
+    ri=[r-i*l for i in range(m)]
+    ri.reverse()
+
+    arr_type = torch.float32
+
+    cordinates = torch.zeros(t,3,dtype=arr_type)
+    dl = torch.zeros(t-1,3,dtype=arr_type)
+
+    if dp is not None:
+        cordinates_2 = torch.zeros(t,3,dtype=arr_type)
+        dl_2 = torch.zeros(t-1,3,dtype=arr_type)
+
+    t_arr_v = torch.arange(0,tvr,1,dtype=arr_type) 
+
+    k=0
+    for i in range(m):
+        t_arr = torch.arange(0,ti[i],1,dtype=arr_type)
+
+        if dp is None:
+            cordinates[k:k+ti[i],0] = ri[i]*torch.cos(2*np.pi*t_arr*ns[i]/(ti[i]-1)) + x
+            cordinates[k:k+ti[i],1] = ri[i]*torch.sin(2*np.pi*t_arr*ns[i]/(ti[i]-1)) + y
+            cordinates[k:k+ti[i],2] = h*t_arr/(ti[i]-1) + z
+        else:
+            cordinates[k:k+ti[i],0] = (ri[i]-dp/2)*torch.cos(2*np.pi*t_arr*ns[i]/(ti[i]-1)) + x
+            cordinates[k:k+ti[i],1] = (ri[i]-dp/2)*torch.sin(2*np.pi*t_arr*ns[i]/(ti[i]-1)) + y
+            cordinates[k:k+ti[i],2] = h*t_arr/(ti[i]-1) + z
+
+            cordinates_2[k:k+ti[i],0] = (ri[i]+dp/2)*torch.cos(2*np.pi*t_arr*ns[i]/(ti[i]-1)) + x
+            cordinates_2[k:k+ti[i],1] = (ri[i]+dp/2)*torch.sin(2*np.pi*t_arr*ns[i]/(ti[i]-1)) + y
+            cordinates_2[k:k+ti[i],2] = h*t_arr/(ti[i]-1) + z
+
+        k += ti[i]
+
+        if i != m-1:
+            xpr = cordinates[k-1][0]-l/2
+            ypr = cordinates[k-1][1]
+            if dp is None:
+                cordinates[k:k+tvr,0] = xpr
+                cordinates[k:k+tvr,1] = ypr
+                cordinates[k:k+tvr,2] = h*(1-t_arr_v/(tvr-1)) + z
+            else:
+                cordinates[k:k+tvr,0] = xpr-dp/2
+                cordinates[k:k+tvr,1] = ypr
+                cordinates[k:k+tvr,2] = h*(1-t_arr_v/(tvr-1)) + z
+
+                cordinates_2[k:k+tvr,0] = xpr+dp/2
+                cordinates_2[k:k+tvr,1] = ypr
+                cordinates_2[k:k+tvr,2] = h*(1-t_arr_v/(tvr-1)) + z
+
+            k += tvr
+    
+    dl = cordinates[1:k,:] - cordinates[0:k-1,:]
+    if dp is None:
+        return cordinates.numpy(), dl.numpy()
+    else:
+        dl_2 = cordinates_2[1:k,:] - cordinates_2[0:k-1,:]
+        return cordinates.numpy(), dl.numpy(), cordinates_2.numpy(), dl_2.numpy()
     
 
 def Solinoid(x,y,z,r,h,n,t):
@@ -255,6 +327,30 @@ def Solinoid(x,y,z,r,h,n,t):
             dl[i-1] = cordinates[i:i+1,:]-cordinates[i-1:i,:]
 
     return cordinates, dl
+
+def SolinoidTorch(x,y,z,r,h,n,t):
+    """
+    Построение координат элементарных участков соленойда\n
+    x,y,z, - координаты отсчёта построения соленойда\n
+    r - радиус соленойда\n
+    h - высота соленойда\n
+    n - количество витков в соленойде\n
+    t - угловая длинна элементарного участка\n
+    """
+    # 
+    t = int(360/t*n)
+    
+    cordinates = torch.zeros(t,3,dtype=torch.float32)
+    dl = torch.zeros(t-1,3,dtype=torch.float32)
+
+    t_arr = torch.arange(0,t,1,dtype=torch.float32)
+    cordinates[:,0] = r*torch.cos(2*np.pi*t_arr*n/t) + x
+    cordinates[:,1] = r*torch.sin(2*np.pi*t_arr*n/t) + y
+    cordinates[:,2] = h*t_arr/t + z
+
+    dl = cordinates[1:t,:] - cordinates[0:t-1,:]
+    
+    return cordinates.numpy(), dl.numpy()
 
 
 def equations(a,x,y):
@@ -330,68 +426,133 @@ def MagnetikVoltage(I,cordinates,dl,x,y,z):
                     rez[1] if not np.isnan(rez[1]) else I,\
                     rez[2] if not np.isnan(rez[2]) else I,],dtype=np.float64)
 
-def Paralel_calk(tsk,tensors_list,common_list,number_of_tasks,coef_mmr,qu_cpu,qu_gpu,Result):
-    while True:
-        if tsk != "cpu":
-            task_Trig, k, obj = qu_gpu.get()
+
+class Thread_Calc(Thread):
+    def __init__(self,tsk_for,tensors_list,common_list,queue_list,coef_mmr,Result,Feedback = None):
+        Thread.__init__(self)
+        self.tsk_for = tsk_for
+        self.qu_cpu, self.qu_gpu, self.number_of_tasks = queue_list
+        self.tensors_list, self.common_list = tensors_list, common_list
+        self.coef_mmr = coef_mmr
+        self.Result = Result
+        self.call = False
+        if Feedback is not None:
+            self.call = True
+            self.back = Feedback[0]
+            self.message_widget = Feedback[1]
+
+        self.event = Event()
+        #print(self.event)
+    
+    def run(self):
+        if self.tsk_for == "cpu":
+            self.cpu_start()
+        elif self.tsk_for == "gpu":
+            self.gpu_start()
+
+    def stop(self):       
+        self.event.set()
+
+    def cpu_start(self):
+        cpu_start = False
+        while not self.event.is_set():
+            task_Trig, k, obj = self.qu_cpu.get()
+
+            if task_Trig == "End" and cpu_start:
+                if self.call:
+                    self.back("cpu")
+                break
+
+            elif task_Trig == "Cancel" and cpu_start:
+                break
+
+            elif task_Trig == "Work" and cpu_start:
+                self.Result[k,:] += MagnetikVoltageTorch(self.tensors_list,self.common_list,k,obj,"cpu")
+                if self.call:
+                    self.message_widget.setValue(number_task-(self.qu_gpu.qsize()+self.qu_cpu.qsize()))
+
+            elif task_Trig == "Start":
+                cpu_start = True
+                if self.call:
+                    number_task = self.qu_gpu.qsize() + self.qu_cpu.qsize()
+
+            else:
+                self.qu_cpu.put((task_Trig, k, obj))
+
+    def gpu_start(self):
+        while not self.event.is_set():
+            task_Trig, k, obj = self.qu_gpu.get()
             if task_Trig == "Start":
                 if torch.cuda.is_available():
                     device = torch.cuda.current_device()
-                    free_mmr = distribution_memory(tensors_list,coef=coef_mmr)
+                    free_mmr = distribution_memory(self.tensors_list,coef=self.coef_mmr)
 
                     objs = len(free_mmr)
-                    tensors_list_gpu = [[None for i in range(objs)] for j in range(len(tensors_list))]
+                    tensors_list_gpu = [[None for i in range(objs)] for j in range(len(self.tensors_list))]
                     re = -1
 
                     for i in range(objs):
                         re += 1
                         if free_mmr[i]:
-                            for j in range(len(tensors_list)):
-                                tensors_list_gpu[j][i] = tensors_list[j][i].to(device)
+                            for j in range(len(self.tensors_list)):
+                                tensors_list_gpu[j][i] = self.tensors_list[j][i].to(device)
                         else:
                             break
                     else:
                         re+=1
 
                     if re == objs:
-                        qu_gpu.put(("End",None,None))
-                        qu_cpu.put(("End",None,None))
+                        self.qu_gpu.put(("End",None,None))
+                        self.qu_cpu.put(("End",None,None))
+                        self.qu_cpu.put(("Start",None,None))
 
-                        for i in range(number_of_tasks):
+                        for i in range(self.number_of_tasks):
                             for j in range(objs):
-                                qu_gpu.put(("Work",i,j))
+                                self.qu_gpu.put(("Work",i,j))
                     
                     elif re == 0:
-                        qu_gpu.put(("End",None,None))
-                        qu_cpu.put(("End",None,None))
+                        self.qu_gpu.put(("End",None,None))
+                        self.qu_cpu.put(("End",None,None))
 
-                        for i in range(number_of_tasks):
+                        for i in range(self.number_of_tasks):
                             for j in range(objs):
-                                qu_cpu.put(("Work",i,j))
+                                self.qu_cpu.put(("Work",i,j))
+                        
+                        self.qu_cpu.put(("Start",None,None))
 
                     elif 0 < re < objs:
-                        qu_gpu.put(("Rewrite",None,None))
-                        qu_cpu.put(("End",None,None))
+                        self.qu_gpu.put(("Rewrite",None,None))
+                        #qu_cpu.put(("End",None,None))
 
-                        for i in range(number_of_tasks):
+                        for i in range(self.number_of_tasks):
                             for j in range(objs):
                                 if j < re:
-                                    qu_gpu.put(("Work",i,j))
+                                    self.qu_gpu.put(("Work",i,j))
                                 else:
-                                    qu_cpu.put(("Work",i,j))
+                                    self.qu_cpu.put(("Work",i,j))
+
+                        self.qu_cpu.put(("Start",None,None))
+
 
                 else:
-                    qu_gpu.put(("End",None,None))
-                    qu_cpu.put(("End",None,None))
+                    self.qu_gpu.put(("End",None,None))
+                    self.qu_cpu.put(("End",None,None))
 
-                    for i in range(number_of_tasks):
+                    for i in range(self.number_of_tasks):
                         for j in range(objs):
-                            qu_cpu.put(("Work",i,j))
+                            self.qu_cpu.put(("Work",i,j))
+
+                    self.qu_cpu.put(("Start",None,None))
+                
+                if self.call:
+                    number_task = self.qu_gpu.qsize()+self.qu_cpu.qsize()
+                    self.message_widget.setRange(0, number_task)
+                
 
             if task_Trig == "Rewrite":
-                tensors_list_gpu = [[None for i in range(objs)] for j in range(len(tensors_list))]
+                tensors_list_gpu = [[None for i in range(objs)] for j in range(len(self.tensors_list))]
 
-                free_mmr = distribution_memory(tensors_list,start=re, coef=coef_mmr)
+                free_mmr = distribution_memory(self.tensors_list,start=re, coef=self.coef_mmr)
 
                 start = re
                 re -= 1
@@ -399,8 +560,8 @@ def Paralel_calk(tsk,tensors_list,common_list,number_of_tasks,coef_mmr,qu_cpu,qu
                 for i in range(start,objs):
                     re += 1
                     if free_mmr[i-start]:
-                        for j in range(len(tensors_list)):
-                            tensors_list_gpu[j][i] = tensors_list[j][i].to(device)
+                        for j in range(len(self.tensors_list)):
+                            tensors_list_gpu[j][i] = self.tensors_list[j][i].to(device)
                     else:
                         break
                 else:
@@ -409,50 +570,97 @@ def Paralel_calk(tsk,tensors_list,common_list,number_of_tasks,coef_mmr,qu_cpu,qu
                 tasks = []
 
                 if re <= objs:
-                    if qu_cpu.qsize() != 0:
+                    if self.qu_cpu.qsize() != 0:
                         while True:
-                            g = qu_cpu.get()
+                            g = self.qu_cpu.get()
                             if g[0] == "End":
                                 break
                             tasks.append(g)
 
                         if re == objs:
-                            qu_gpu.put(("End",None,None))
-                            qu_cpu.put(("End",None,None))
+                            self.qu_gpu.put(("End",None,None))
+                            self.qu_cpu.put(("End",None,None))
 
                             for i in tasks:
-                                qu_gpu.put(i)
+                                self.qu_gpu.put(i)
                         else:
-                            qu_gpu.put(("Rewrite",None,None))
-                            qu_cpu.put(("End",None,None))
+                            self.qu_gpu.put(("Rewrite",None,None))
+                            self.qu_cpu.put(("End",None,None))
 
                             for i in tasks:
                                 if i[2]>=re:
-                                    qu_cpu.put(i)
+                                    self.qu_cpu.put(i)
                                 else:
-                                    qu_cpu.put(i)
+                                    self.qu_cpu.put(i)
                     else:
-                        qu_gpu.put(("End",None,None))
+                        self.qu_gpu.put(("End",None,None))
                     
             elif task_Trig == "End" :
+                if self.call:
+                    self.back("gpu")
+                break
+            
+            elif task_Trig == "Cancel" :
                 break
 
             elif task_Trig == "Work":
-                Result[k,:] += MagnetikVoltageTorch(tensors_list_gpu,common_list,k,obj,device)
-                
-        else:
-            task_Trig, k, obj = qu_cpu.get()
+                if self.call:
+                    self.message_widget.setValue(number_task-(self.qu_gpu.qsize()+self.qu_cpu.qsize()))
+                    self.Result[k,:] += MagnetikVoltageTorch(tensors_list_gpu,self.common_list,k,obj,device)
+   
 
-            if task_Trig == "End":
-                break
-            if task_Trig == "Work":
-                Result[k,:] += MagnetikVoltageTorch(tensors_list,common_list,k,obj,"cpu")
-            
-            
+
+
+class Paralel_Calc():
+    def __init__(self,tensors_list,common_list,tasks,coef_mmr,Result,Feedback = None):
+        self.tensors_list, self.common_list = tensors_list, common_list
+        self.coef_mmr = coef_mmr
+        self.Result = Result
+        self.tasks = tasks
+        self.qu_cpu = LifoQueue()
+        self.qu_gpu = LifoQueue()
+        self.qu_gpu.put(("Start",None,None))
+
+        if Feedback is not None:
+            self.Feedback = [self.call_back(Feedback),Feedback[1]]
+            self.Feedback[1].canceled.connect(lambda: self.stop())
+
+
+    def start(self, join=False):
+        self.p1 = Thread_Calc("cpu", self.tensors_list, self.common_list,[self.qu_cpu, self.qu_gpu, self.tasks], self.coef_mmr, self.Result,self.Feedback)
+        self.p2 = Thread_Calc("gpu", self.tensors_list, self.common_list,[self.qu_cpu, self.qu_gpu, self.tasks], self.coef_mmr, self.Result,self.Feedback)
+        self.p1.start()
+        self.p2.start()
+        if join:
+            self.p1.join()
+            self.p2.join() 
+
+        print("start")
+
+    def stop(self):
+        print("end0")
+        self.p1.stop()
+        print("end1")
+        self.p2.stop()
+        print("end2")
+
+    def call_back(self,call_func,cpu = False, gpu = False):
+        """ Вызов функции по завершению расчёта """
+        def Call(device):
+            nonlocal cpu, gpu, call_func
+            if device == "cpu":
+                cpu = True
+            if device == "gpu":
+                gpu = True
+            if cpu and gpu:
+                call_func[1].reset()
+                call_func[0]()
+        return Call
+                
 
 
 def MagnetikVoltageTorch(tensor_list,common_list,k,obj,device):
-    x,y,z,alfs,I = common_list
+    x,y,z,alfs,I,trig = common_list
     cordinates, dl = tensor_list
     """
     Расчёт напряжённости от одного проводника\n
@@ -462,7 +670,7 @@ def MagnetikVoltageTorch(tensor_list,common_list,k,obj,device):
     x,y,z - координаты точки в которой определяем напряжённость поля\n
     """
     t = dl[obj].size()[0]
-    point = torch.tensor([x[k],y[k],z],dtype=torch.float32).to(device)
+    point = torch.tensor([x[k],y[k],z[k] if trig else z],dtype=torch.float32).to(device)
     rv = (point - cordinates[obj])[:t,:]
     r = 1/(4*np.pi*torch.norm(rv,dim=1)**3)
     r = torch.reshape(r, (t,1))
@@ -496,6 +704,25 @@ def MutualInduct(cordinates_1,dl_1,cordinates_2,dl_2):
  
     return M*10**-7
 
+def MutualInductTorch(tensor_list):
+    """
+    Расчёт взаимной индукции между двумя произвольно расположенными проводниками\n
+     
+    """
+    dl_1, dl_2 = tensor_list[1],tensor_list[3]
+    t_1 = dl_1.size()[0]
+    t_2 = dl_2.size()[0]
+    
+    Cordinates_1 = tensor_list[0][:t_1,:]
+    Cordinates_2 = tensor_list[2][:t_2,:]
+
+    M = 0
+
+    for i in range(t_2):
+        M += torch.sum(torch.sum(dl_1*dl_2[i,:],1)/torch.norm(Cordinates_1-Cordinates_2[i,:],dim=1))    
+ 
+    return M*10**-7
+
 def SameInduct(cordinates,dl,mu=1):
     """
     Расчёт собственной индукции м проводника\n
@@ -514,11 +741,35 @@ def SameInduct(cordinates,dl,mu=1):
         own = np.zeros((t,3),dtype=np.float64)
         own[i,:]=dr
         r = 1/np.linalg.norm((Cordinates_1+Cordinates_2-Cordinates_1[i,:]-Cordinates_2[i,:]+own)/2,axis=1)
-        M += np.sum(np.dot(dl,dl[i,:])*r) 
+        r3 = np.sum(dl*dl[i,:],axis=1)
+        M += np.sum(r3*r) 
 
     
 
     return (M+np.sum(np.linalg.norm(dl))/2*mu) *10**-7
+
+def SameInductTorch(tensor_list,mu=1):
+    """
+    Расчёт собственной индукции м проводника\n
+     
+    """
+    dl_1, dl_2 = tensor_list[1], tensor_list[3]
+    t = dl_1.size()[0]
+    Cordinates_1, Cordinates_2 = tensor_list[0][:t,:], tensor_list[2][0:t,:]
+
+    #dr = torch.sum(dl,0)/t
+
+    #own = torch.zeros(t,3,dtype=torch.float32,device = dl.device)
+    M = 0
+    for i in range(t):
+        #own[i,:]+=dr
+        #(Cordinates_1+Cordinates_2-Cordinates_1[i,:]-Cordinates_2[i,:]+own)/2
+        M += torch.sum(torch.sum(dl_1*dl_2[i,:],1)/torch.norm(Cordinates_1-Cordinates_2[i,:],dim=1))
+        #own[i,:]-=dr
+
+    print(M*10**-7)
+    print(torch.sum(torch.norm(dl_1))/2*mu*10**-7)
+    return (M+torch.sum(torch.norm(dl_1))/2*mu) *10**-7
 
 def provod(xn,yn,zn,xk,yk,zk,t):
     dx = (xk-xn)/(t-1)
@@ -599,7 +850,7 @@ def ReadConduct(d,DL):
         
 
 
-def run_area_calc(tp,lst, area, hz, step, DL, deg):
+def run_area_calc(tp,lst, area, hz, step, DL, deg, callback_func = None):
     cordinates = []
     dls = []
     alfs = []
@@ -612,9 +863,9 @@ def run_area_calc(tp,lst, area, hz, step, DL, deg):
                 args, m, alf, I = rez
             else: continue
             if m == 1:
-                cordinate, dl = Solinoid(*args)
+                cordinate, dl = SolinoidTorch(*args)
             elif m>1:
-                cordinate, dl = Solinoid1(*args)
+                cordinate, dl = Solinoid1Torch(*args) #Torch
         elif i["obj_type"] == "conductor":
             rez = ReadConduct(i,DL)
             if rez is not None:
@@ -644,11 +895,6 @@ def run_area_calc(tp,lst, area, hz, step, DL, deg):
         for obj in range(len(dls)):
             cordinates[obj] = torch.from_numpy(cordinates[obj])
             dls[obj] = torch.from_numpy(dls[obj])
-
-
-        qu_cpu = LifoQueue()
-        qu_gpu = LifoQueue()
-        qu_gpu.put(("Start",None,None))
                 
         k=0
         for i in range(row):
@@ -657,16 +903,15 @@ def run_area_calc(tp,lst, area, hz, step, DL, deg):
                 Y[k] =i*step+area[1]
                 k+=1
 
-        p1 = Thread(target=Paralel_calk, args = ("cpu", [cordinates, dls], [X,Y,hz[0],alfs,Is], k, 2.2, qu_cpu, qu_gpu, H_area))
-        p2 = Thread(target=Paralel_calk, args = ('gpu', [cordinates, dls], [X,Y,hz[0],alfs,Is], k, 2.2, qu_cpu, qu_gpu, H_area))
-        p1.start()
-        p2.start()
-        p1.join()
-        p2.join()
+        PC = Paralel_Calc([cordinates, dls],[X,Y,hz[0],alfs,Is,False],k,2.4,H_area, [lambda: callback_func[0]((X,Y),H_area),callback_func[1]])
 
+        
+        if callback_func is None:
+            PC.start(join=True)
+            return (X,Y), H_area
 
-        H_area = np.linalg.norm(H_area,axis=1)
-        return (X,Y), H_area
+        else:
+            PC.start()
 
         
     elif tp == "V_calc_area":
@@ -677,11 +922,19 @@ def run_area_calc(tp,lst, area, hz, step, DL, deg):
         hz = (f(hz[0],step),f(hz[1],step))
         row = int((hz[1]-hz[0])/step)+1
 
-        H_area = np.zeros(row*col,dtype=np.float64)
-        X = np.zeros(row*col,dtype=np.float64)
-        Y = np.zeros(row*col,dtype=np.float64)
-        Z = np.zeros(row*col,dtype=np.float64)
+        H_area = np.zeros((row*col,3),dtype=np.complex64)
+        X = np.zeros(row*col,dtype=np.float32)
+        Y = np.zeros(row*col,dtype=np.float32)
+        Z = np.zeros(row*col,dtype=np.float32)
 
+        for obj in range(len(dls)):
+            cordinates[obj] = torch.from_numpy(cordinates[obj])
+            dls[obj] = torch.from_numpy(dls[obj])
+
+        qu_cpu = LifoQueue()
+        qu_gpu = LifoQueue()
+        qu_gpu.put(("Start",None,None))
+        f = Feedback([lambda: callback_func[0]((X,Y,Z),H_area),callback_func[1]] if callback_func is not None else lambda :print("я отработала"))
         
         k=0
         for i in range(row):
@@ -690,13 +943,20 @@ def run_area_calc(tp,lst, area, hz, step, DL, deg):
                 X[k] = (area[0]+area[2]*(m/(1-m)))/(1+(m/(1-m))) if (1-m)!= 0 else area[2]
                 Y[k] = (area[1]+area[3]*(m/(1-m)))/(1+(m/(1-m))) if (1-m)!= 0 else area[3]
                 Z[k] = i*step+hz[0]
-                H_point = np.zeros(3,dtype=np.complex128)
-                for obj in range(len(dls)):
-                    H_point += MagnetikVoltage(Is[obj],cordinates[obj], dls[obj],X[k],Y[k],Z[k])*alfs[obj]
-                H_area[k] = np.linalg.norm(H_point)
                 k+=1
 
-        return (X,Y,Z), H_area
+        p1 = Thread(target=Paralel_calk, args = ("cpu", [cordinates, dls], [X,Y,Z,alfs,Is,True], k, 2.4, qu_cpu, qu_gpu, H_area, [f,callback_func[1]]))
+        p2 = Thread(target=Paralel_calk, args = ('gpu', [cordinates, dls], [X,Y,Z,alfs,Is,True], k, 2.4, qu_cpu, qu_gpu, H_area, [f,callback_func[1]]))
+        p1.start()
+        p2.start()
+
+        callback_func[1].canceled.connect(lambda:CloseCalc(p1,p2,qu_cpu,qu_gpu))
+
+        if callback_func is None:
+            p1.join()
+            p2.join()
+            #H_area = np.linalg.norm(H_area,axis=1)
+            return (X,Y,Z), H_area
 
         
     elif tp == "O_calc_point":
@@ -710,143 +970,27 @@ def run_area_calc(tp,lst, area, hz, step, DL, deg):
 
 if __name__ == '__main__':
     #cordinates_1,dl_1 = provod(0,0,  0, 1,0,  0,1000)
+    #print(SameInduct(cordinates_1,dl_1))
     #cordinates_2,dl_2 = provod(0,0.1,0, 1,0.1,0,1000)
-    cordinates_1,dl_1 = Solinoid1(0,0,1.33,1.1175,1.115,1400,14,0.024,1)
+    #cordinates_1,dl_1 = Solinoid1Torch(0,0,0,1,0.001,1,1,0,0.1)
+    #cordinates_2,dl_2 = Solinoid1Torch(0,0,1,1,0.001,1,1,0,0.1)
+    #cordinates_1,dl_1 = Solinoid1Torch(0,0,1.33,1.1175,1.115,1400,14,0.024,1)
 
-    #print(MutualInduct(cordinates_1,dl_1,cordinates_2,dl_2))
-    print(SameInduct(cordinates_1,dl_1))
+    """ cordinates_1,dl_1 = Solinoid1Torch(0,0,0,1,0.001,1,1,0,0.1)
+    cordinates_2,dl_2 = Solinoid1Torch(0,0,1,1,0.001,1,1,0,0.1)
+    cordinates_1 = torch.from_numpy(cordinates_1).to(0)
+    dl_1 = torch.from_numpy(dl_1).to(0)
+    cordinates_2 = torch.from_numpy(cordinates_2).to(0)
+    dl_2 = torch.from_numpy(dl_2).to(0)
+    print(MutualInductTorch([cordinates_1,dl_1,cordinates_2,dl_2])) """
 
+    cordinates_1,dl_1,cordinates_2,dl_2 = Solinoid1Torch(0,0,1.33,1.1175,1.115,1400,14,0.024,1,dp=0.01)
+    #cordinates_1,dl_1,cordinates_2,dl_2 = Solinoid1Torch(0,0,0,1,0.001,1,1,0,0.1,dp=0.01)
+    cordinates_1 = torch.from_numpy(cordinates_1).to(0)
+    dl_1 = torch.from_numpy(dl_1).to(0)
+    cordinates_2 = torch.from_numpy(cordinates_2).to(0)
+    dl_2 = torch.from_numpy(dl_2).to(0)
+    print(SameInductTorch([cordinates_1,dl_1,cordinates_2,dl_2]))
 
-    """ tic = time()
-    #cordinatesA, dl_A = Solinoid1(0,2,3.461,1.17,1.84,67,2,0.2,1)
-    cordinatesB, dl_B = Solinoid1(2,-2,3.461,1.17,1.84,67,2,0.2,1)
-    cordinatesC, dl_C = Solinoid1(-2,-2,3.461,1.17,1.84,67,2,0.2,1)
-
-    cordinatesA, dl_A  = Line([[-4,-4,3],[-4,4,4],[4,4,4],[4,-4,3]],0.1,fmax=[2,2,2]) #,fmax=[2,2,2]
-    #print(cordinatesA)
-    #print(dl_A )
-
-
-    #mn = -20
-    #mx = 20
-    stap = 0.1
-    #row = int((mx-mn)/stap)
-
-    area = [-5,-5,5,5]
-    col = int((area[2]-area[0])/stap)
-    row = int((area[3]-area[1])/stap)
 
     
-    H_area = np.zeros(row*col,dtype=np.float64)
-    X = np.zeros(row*col,dtype=np.float64)
-    Y = np.zeros(row*col,dtype=np.float64)
-
-
-
-
-    k=0
-    for i in range(row):#row
-        for j in range(col):
-            
-            X[k] =j*stap+area[0]
-            Y[k] =i*stap+area[1]
-            H_pointA = MagnetikVoltage(1*1754,cordinatesA, dl_A,X[k],Y[k],1.8)#1.8
-            #H_pointB = MagnetikVoltage(1*1754,cordinatesB, dl_B,X[k],Y[k],1.8)
-            #H_pointC = MagnetikVoltage(1*1754,cordinatesC, dl_C,X[k],Y[k],1.8)
-            H_area[k] = np.linalg.norm(H_pointA)#+H_pointB*alf1+H_pointC*alf2
-            k+=1
-            #print( X[k], Y[k],k)
-
-    tuc = time()
-    print(tuc-tic)
- 
-
-    xi, yi = np.linspace(X.min(), X.max(), 100), np.linspace(Y.min(), Y.max(), 100)
-    xi, yi = np.meshgrid(xi, yi)
-
-    rbf = scipy.interpolate.Rbf(X, Y, H_area, function='linear')
-    zi = rbf(xi, yi)
-
-    plt.imshow(zi, vmin=H_area.min(), vmax=H_area.max(), origin='lower',
-            extent=[X.min(), X.max(), Y.min(), Y.max()])
-    plt.scatter(X, Y, c=H_area)
-    plt.colorbar()
-
-    #  Задаем значение каждого уровня:
-    lev = [30,300]
-
-    #  Создаем массив RGB цветов каждого уровня:
-    color_line = np.zeros((2, 3))
-    color_line[0] = np.array([0,0,1])
-    color_line[1] = np.array([1,0,0])
-
-    #  Контуры одного цвета:
-    cs = plt.contour(xi, yi, zi, levels = lev,
-            colors = color_line)
-
-    countur_date = cs.allsegs
-    #print(countur_date)
-    plt.clabel(cs)
-
-    plt.show()  """
-
-
-    """ mn = -5
-    mx = 5
-    stap = 0.25
-    row = int((mx-mn)/stap)
-    H_area = np.zeros(row*row,dtype=np.float64)
-    X = np.zeros(row*row,dtype=np.float64)
-    Y = np.zeros(row*row,dtype=np.float64)
-
-    cordinatesA1, dl_A1 = Solinoid1(-2.059,0,0.9878,0.9638,0.6585,15,2,0.219,1)
-    cordinatesB1, dl_B1 = Solinoid1(-2.059,0,1.9207,0.9638,0.6585,15,2,0.219,1)
-    cordinatesC1, dl_C1 = Solinoid1(-2.059,0,2.8536,0.9638,0.6585,15,2,0.219,1)
-
-    cordinatesA2, dl_A2 = Solinoid1(2.059,0,0.9878,0.9638,0.6585,15,2,0.219,1)
-    cordinatesB2, dl_B2 = Solinoid1(2.059,0,1.9207,0.9638,0.6585,15,2,0.219,1)
-    cordinatesC2, dl_C2 = Solinoid1(2.059,0,2.8536,0.9638,0.6585,15,2,0.219,1)
-    k=0
-    for i in range(row):#row
-        for j in range(row):
-            #print(k)
-            X[k] =i*stap+mn
-            Y[k] =j*stap+mn
-            H_pointA1 = MagnetikVoltage(24100,cordinatesA1, dl_A1,X[k],Y[k],4.5)#24100№1500
-            H_pointB1 = MagnetikVoltage(24100,cordinatesB1, dl_B1,X[k],Y[k],4.5)
-            H_pointC1 = MagnetikVoltage(24100,cordinatesC1, dl_C1,X[k],Y[k],4.5)
-
-            H_pointA2 = MagnetikVoltage(18200,cordinatesA2, dl_A2,X[k],Y[k],4.5)#18200№1500
-            H_pointB2 = MagnetikVoltage(18200,cordinatesB2, dl_B2,X[k],Y[k],4.5)
-            H_pointC2 = MagnetikVoltage(18200,cordinatesC2, dl_C2,X[k],Y[k],4.5)
-
-            H_area[k] = np.linalg.norm(H_pointA1+H_pointA2+H_pointB1*alf1+H_pointB2*alf1+H_pointC1*alf2+H_pointC2*alf2)
-
-            k+=1
-
-
-    xi, yi = np.linspace(X.min(), X.max(), 100), np.linspace(Y.min(), Y.max(), 100)
-    xi, yi = np.meshgrid(xi, yi)
-
-    rbf = scipy.interpolate.Rbf(X, Y, H_area, function='linear')
-    zi = rbf(xi, yi)
-
-    plt.imshow(zi, vmin=H_area.min(), vmax=H_area.max(), origin='lower',
-            extent=[X.min(), X.max(), Y.min(), Y.max()])
-    plt.scatter(X, Y, c=H_area)
-    plt.colorbar()
-
-    plt.show()  """
-
-    """ cordinatesA1, dl_A1 = Solinoid1(-2.059,0,0.9878,0.9638,0.6585,15,2,0.219,1)
-    cordinatesB1, dl_B1 = Solinoid1(-2.059,0,1.9207,0.9638,0.6585,15,2,0.219,1)
-    cordinatesC1, dl_C1 = Solinoid1(2.059,0,0.9878,0.9638,0.6585,15,2,0.219,1)
-
-    H_pointA1 = MagnetikVoltage(1,cordinatesA1, dl_A1,5.291,0.8737,4.5)#31400
-    H_pointB1 = MagnetikVoltage(27193.2,cordinatesB1, dl_B1,5.291,0.8737,4.5)#27193.2
-    H_pointC1 = MagnetikVoltage(27193.2,cordinatesC1, dl_C1,5.291,0.8737,4.5)#3637
-
-
-    H_area = np.linalg.norm(H_pointA1*1+H_pointB1*alf3+H_pointC1*alf4)
-
-    print(H_area) """
