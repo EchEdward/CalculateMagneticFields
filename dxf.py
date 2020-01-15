@@ -110,6 +110,9 @@ def SaveInDXF(sp_points,sp_levels,sp_obj,fname):
         doc.layers.new('OBJECTS') #, dxfattribs={'color': 160}
     else:
         doc = ezdxf.readfile(fname[0])
+        if 'OBJECTS' not in doc.layers:
+            #layer = doc.layers.get('OBJECTS')
+            doc.layers.new('OBJECTS')
 
     # Create new table entries (layers, linetypes, text styles, ...).
     doc.layers.new('POINTS', dxfattribs={'color': 160}) #

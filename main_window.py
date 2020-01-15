@@ -764,7 +764,7 @@ class Screen(QMainWindow):
                             da = float(i[3].menu.data["da"])
                             z = (float(i[3].menu.data["Z"]),)
                             tp = "H_calc_area"
-
+                            
                             SpaceCord, H_area = run_area_calc(tp,lst,area_calc,z,dg,dl,da)
                             sp_levels += self.ShowCanvas(SpaceCord,H_area,area_calc,z,tp,tc=1)
 
