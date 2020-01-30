@@ -132,6 +132,7 @@ class Thread_Calc(Thread):
             task_Trig, k, obj = self.qu_cpu.get()
 
             if task_Trig == "End" and cpu_start:
+                print("cpu_end")
                 if self.call:
                     self.back("cpu")
                 break
@@ -142,9 +143,11 @@ class Thread_Calc(Thread):
             elif task_Trig == "Work" and cpu_start:
                 self.Result[k,:] +=  self.calc_func(*self.tensors_list,*self.common_list,k,obj,"cpu")
                 if self.call:
-                    self.message_widget.setValue(number_task-(self.qu_gpu.qsize()+self.qu_cpu.qsize()))
+                    #self.message_widget[2](number_task-(self.qu_gpu.qsize()+self.qu_cpu.qsize()))
+                    self.setNewSignal(number_task-(self.qu_gpu.qsize()+self.qu_cpu.qsize()))
 
             elif task_Trig == "Start":
+                self.lastIndTime = time()
                 cpu_start = True
                 if self.call:
                     number_task = self.qu_gpu.qsize() + self.qu_cpu.qsize()
@@ -156,6 +159,7 @@ class Thread_Calc(Thread):
         while not self.event.is_set():
             task_Trig, k, obj = self.qu_gpu.get()
             if task_Trig == "Start":
+                self.lastIndTime = time()
                 if torch.cuda.is_available():
                     device = torch.cuda.current_device()
                     free_mmr = distribution_memory(self.tensors_list,coef=self.coef_mmr)
@@ -168,7 +172,8 @@ class Thread_Calc(Thread):
                         re += 1
                         if free_mmr[i]:
                             for j in range(len(self.tensors_list)):
-                                tensors_list_gpu[j][i] = self.tensors_list[j][i].to(device)
+                                tensors_list_gpu[j][i] = self.tensors_list[j][i].to(device) #device
+                                #tensors_list_gpu[j][i] = self.tensors_list[j][i].numpy()
                         else:
                             break
                     else:
@@ -219,7 +224,7 @@ class Thread_Calc(Thread):
                 
                 if self.call:
                     number_task = self.qu_gpu.qsize()+self.qu_cpu.qsize()
-                    self.message_widget.setRange(0, number_task)
+                    self.message_widget[1](0, number_task)
                 
 
             if task_Trig == "Rewrite":
@@ -279,9 +284,14 @@ class Thread_Calc(Thread):
             elif task_Trig == "Work":
                 self.Result[k,:] +=  self.calc_func(*tensors_list_gpu,*self.common_list,k,obj,device)
                 if self.call:
-                    self.message_widget.setValue(number_task-(self.qu_gpu.qsize()+self.qu_cpu.qsize()))
+                    #self.message_widget[2](number_task-(self.qu_gpu.qsize()+self.qu_cpu.qsize()))
+                    self.setNewSignal(number_task-(self.qu_gpu.qsize()+self.qu_cpu.qsize()))
                     
-
+    def setNewSignal(self,val):
+        t = time()
+        if t-self.lastIndTime>0.5:
+            self.message_widget[2](val)
+            self.lastIndTime = t
    
 
 
@@ -297,11 +307,13 @@ class Paralel_Calc():
         self.qu_gpu = LifoQueue()
         self.qu_gpu.put(("Start",None,None))
 
+        #Feedback = None
         if Feedback is not None:
             self.Feedback = [self.call_back(Feedback),Feedback[1]]
-            self.Feedback[1].canceled.connect(lambda: self.stop())
+            self.Feedback[1][0](lambda: self.stop())
         else:
             self.Feedback = None
+
 
 
     def start(self, join=False):
@@ -313,12 +325,10 @@ class Paralel_Calc():
             self.p1.join()
             self.p2.join() 
 
-        print("start")
 
     def stop(self):
         self.p1.stop()
         self.p2.stop()
-        print("end2")
 
     def call_back(self,call_func,cpu = False, gpu = False):
         """ Вызов функции по завершению расчёта """
@@ -329,6 +339,5 @@ class Paralel_Calc():
             if device == "gpu":
                 gpu = True
             if cpu and gpu:
-                call_func[1].reset()
                 call_func[0]()
         return Call

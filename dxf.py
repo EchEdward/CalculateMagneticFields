@@ -1,7 +1,14 @@
-import ezdxf, pickle
+import ezdxf, pickle, json
 
-with open('table_color.pkl', "rb" ) as f:
+""" with open('table_color.pkl', "rb" ) as f:
     colors  = pickle.load(f)
+    #print(colors) """
+
+with open('table_color.json', "r" ) as f:
+    colors  = {tuple(j):int(i) for i,j in json.load(f).items()}
+
+""" with open( "table_color.json", "w", encoding="utf8") as f:
+    json.dump({j:i for i,j in colors.items()},f, indent=4) """
 
 def OpenFile(fname):
     dwg = ezdxf.readfile(fname)
@@ -13,7 +20,7 @@ def OpenFile(fname):
     for e in modelspace:
         ind = e.dxf.layer.find("-")
         tp_l = e.dxf.layer[:ind].lower()
-        name = e.dxf.layer[ind:]
+        name = e.dxf.layer[ind+1:]
         if tp_l==type_layers[0]:
             layers[e.dxf.layer] = {"name":name,"type":tp_l,"circle":{},"lwpolyline":{},\
                 "size":[float("inf"),float("inf"),-float("inf"),-float("inf"),]}

@@ -2,22 +2,23 @@
 # pylint: disable=E1101
 
 from PyQt5.QtGui import QBrush, QImage, QPixmap, QPainter, QPen, QCursor,QPolygonF, QWheelEvent,QColor, QMouseEvent,\
-     QStandardItemModel, QStandardItem, QIcon
-from PyQt5.QtWidgets import QMainWindow, QWidget, QGraphicsScene, QGraphicsView, QAction,\
+     QStandardItemModel, QStandardItem, QIcon, QWheelEvent
+from PyQt5.QtWidgets import QMainWindow, QWidget, QGraphicsScene, QGraphicsView, QAction, QActionGroup,\
      QPushButton, QGridLayout, QApplication, QVBoxLayout, QHBoxLayout, QGraphicsEllipseItem, QGraphicsItem,\
      QGraphicsItemGroup,QGraphicsSceneMouseEvent, QListView, QSplitter, QFrame, QSizePolicy, QTreeView,\
      QHeaderView, QCheckBox, QComboBox, QFileDialog, QTabWidget, QTableWidget, QSpinBox, QLabel, QTableWidgetItem,\
-     QColorDialog, QProgressDialog
+     QColorDialog, QProgressDialog, QTreeWidget, QTreeWidgetItem, QMessageBox
 from PyQt5.QtCore import Qt, QPoint, QLineF,QPointF, QEvent, QPersistentModelIndex, QModelIndex
 
 from DrawObjects import GraphicsCircleItem,GraphicsLineItem,GraphicsPolylineItem, GraphicsRectItem, OneCalcCircle
-from ObjectsMenu import DownloadDelegate, Save_Widget
+from ObjectsMenu import DownloadDelegate, Save_Widget, MenuData
 
-from main_calculate import run_area_calc
+from main_calculate import run_area_calc, setTypes, cuda_available
 
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+from matplotlib.colors import LogNorm
 import matplotlib.pyplot as plt
 import matplotlib.ticker
 import matplotlib
@@ -33,53 +34,101 @@ import dxf
 
 import sys
 import os
-import pickle
+
+import json
 
 import inspect
+
+from time import time
+
+
+class TreeWidgetItem(QTreeWidgetItem):
+    def __hash__(self):
+        own_hash = hash(str(self))
+        return own_hash
 
 
 
 class GraphicsView(QGraphicsView):
-    def __init__(self,get_obj_for_resize):
+    def __init__(self,SoursesObjectsDict, AreasObjectsDict, ReturnMousePos = None):
         super().__init__()
-        self.get_obj_for_resize = get_obj_for_resize
+        self.SoursesObjectsDict = SoursesObjectsDict
+        self.AreasObjectsDict = AreasObjectsDict
+        self.ReturnMousePos = ReturnMousePos
         self.current_scale = 1
+        self.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
+        #self.setCacheMode(QGraphicsView.CacheNone)
 
-    def wheelEvent(self, QWheelEvent):
+        self.grid_step()
+
+    @staticmethod
+    def digit(x):
+        a = len(str(int(x)))
+        if a>2:
+            a -= 2
+            return int(x)/10**a, a
+        else:
+            return int(x), 0
+
+    def wheelEvent(self, WheelEvent):
         """ Событие скрола """
         #super(Screen, self).wheelEvent(QWheelEvent)
-        wheelcounter = QWheelEvent.angleDelta()
-        listObjectsDict, calcObjectsDict = self.get_obj_for_resize()
+        wheelcounter = WheelEvent.angleDelta()
+        
 
         if wheelcounter.y()==120:
             self.scale(1.25,1.25)
             self.current_scale*=1.25
-            for obj in listObjectsDict.values():
-                if obj[0] == "name":
-                    obj[3].hndl*=0.8 
-                    obj[3].updateHandlesPos()
-                    
+            for obj in self.SoursesObjectsDict.values():
+                if obj.type_link == "object":
+                    obj.graphic_item.hndl*=0.8
+                    obj.graphic_item.updateHandlesPos()                   
 
-            for obj in calcObjectsDict.values():
-                if obj[0] == "name":
-                    obj[3].hndl*=0.8 
-                    obj[3].updateHandlesPos()
+            for obj in self.AreasObjectsDict.values():
+                if obj.type_link == "object":
+                    obj.graphic_item.hndl*=0.8
+                    obj.graphic_item.updateHandlesPos() 
                     
 
         elif wheelcounter.y()==-120:
             self.scale(0.8,0.8)
             self.current_scale*=0.8
-            for obj in listObjectsDict.values():
-                if obj[0] == "name":
-                    obj[3].hndl*=1.25 
-                    obj[3].updateHandlesPos()
+            for obj in self.SoursesObjectsDict.values():
+                if obj.type_link == "object":
+                    obj.graphic_item.hndl*=1.25
+                    obj.graphic_item.updateHandlesPos()                   
 
-            for obj in calcObjectsDict.values():
-                if obj[0] == "name":
-                    obj[3].hndl*=1.25 
-                    obj[3].updateHandlesPos()
+            for obj in self.AreasObjectsDict.values():
+                if obj.type_link == "object":
+                    obj.graphic_item.hndl*=1.25
+                    obj.graphic_item.updateHandlesPos()
 
 
+    def scale(self,sx,sy):
+        QGraphicsView.scale(self,sx,sy)
+        self.grid_step()       
+
+
+    def grid_step(self):
+        rect = self.mapToScene(self.rect()).boundingRect()
+        a, b = rect.bottom(), rect.top()
+        c, d = rect.left(), rect.right()
+
+        if a <= b: startY,stopY = int(a), int(b)
+        else: startY,stopY = int(b), int(a)
+        if c <= d: startX,stopX = int(c), int(d)
+        else: startX,stopX = int(d), int(c)
+
+        w,h = self.size().width(), self.size().height()
+        #print(w,h)
+        #print(stopX-startX,stopY-startY)
+        #step = (min(stopX-startX,stopY-startY)*min(w,h))/(7000)
+        step = (min(stopX-startX,stopY-startY)*30)/min(w,h)
+        d, st = self.digit(step)
+        r = [1,5,10,25,50]
+        self.step = min(map(lambda x: (x,x-d) , r),key=lambda x: abs(x[1]))[0] *10**st
+        self.line_width = min(w,h)/self.current_scale*0.001
+        #print(self.step)
 
 
     def mousePressEvent(self, mouseEvent):
@@ -94,12 +143,39 @@ class GraphicsView(QGraphicsView):
         super().mousePressEvent(mouseEvent)
 
     def mouseMoveEvent(self, mouseEvent):
+        if self.ReturnMousePos is not None:
+            xy = self.mapToScene(mouseEvent.pos())
+            self.ReturnMousePos(round(xy.x()/1000,3), round(-xy.y()/1000,3))
         super().mouseMoveEvent(mouseEvent)
 
     def mouseReleaseEvent(self, mouseEvent):
         super().mouseReleaseEvent(mouseEvent)
         self.setDragMode(QGraphicsView.NoDrag)
         self.setInteractive(True)
+
+
+    def drawBackground(self,painter,rect, n="a"):
+        step = self.step
+        if n == "a":
+            pen = QPen(QColor(0, 0, 0, 190))
+        else:
+            pen = QPen(QColor(255, 0, 0, 190))
+        pen.setWidthF(self.line_width)
+        painter.setPen(pen)
+        a, b = rect.bottom(), rect.top()
+        c, d = rect.left(), rect.right()
+
+        if a <= b: startY,stopY = int((a//step)*step), int(b)
+        else: startY,stopY = int((b//step)*step), int(a)
+        if c <= d: startX,stopX = int((c//step)*step), int(d)
+        else: startX,stopX = int((d//step)*step), int(c)
+         
+        for y in range(startY,stopY,step):
+            painter.drawLine(c, y, d, y)
+        for x in range(startX,stopX,step):
+            painter.drawLine(x, a, x, b)
+
+
         
 
 
@@ -107,9 +183,6 @@ class GraphicsScene(QGraphicsScene):
     def __init__(self, parent=None):
         QGraphicsScene.__init__(self, parent)
         
-        #s = [632.151407, 582.222388, 5719.943627162954, 2459.169672]
-        #self.setSceneRect(s[0], s[1], s[2]-s[0], s[3]-s[1])
-
         
 # subclass
 class CheckableComboBox(QComboBox):
@@ -178,6 +251,17 @@ class CheckableComboBox(QComboBox):
 
 
 
+class Atributs:
+    def __init__(self,type_link = "layer",
+        type_object = None, graphic_item = None,
+        movable = True, state = False):
+
+        self.type_link = type_link
+        self.type_object = type_object
+        self.graphic_item = graphic_item
+        self.movable = movable
+        self.state = state
+
         
         
     
@@ -202,54 +286,102 @@ class Screen(QMainWindow):
         except Exception:
             self.path_home = ""
 
+        self.setWindowTitle('MFC')
+        self.setWindowIcon(QIcon("images/icon.png"))
+
         LeftPanelFrame = QFrame() 
         LeftPanelFrame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         #LeftPanelFrame.setMinimumSize(QSize(0, 100))
 
+
+        # Treewidgets for all user objects
+        self.SoursesObjectsTree = QTreeWidget()
+        self.AreasObjectsTree = QTreeWidget()
+        self.ReceiverObjectsTree = QTreeWidget()
+
         
+        """ self.SoursesObjectsTree.itemClicked.connect(lambda a,b:print("Click",a,b))
+        self.SoursesObjectsTree.itemActivated.connect(lambda a,b:print("Activated",a,b))
+        self.SoursesObjectsTree.itemChanged.connect(lambda a,b:print("Changed",a,b))
+        self.SoursesObjectsTree.itemPressed.connect(lambda a,b:print("Pressed",a,b))
+        self.SoursesObjectsTree.itemDoubleClicked.connect(lambda a,b:print("DoubleClicked",a,b)) """
 
-        self.listObjects = QTreeView()
-        self.calcObjects = QTreeView()
+        self.SoursesObjectsTree.setColumnCount(2)
+        self.SoursesObjectsTree.setHeaderLabels(["","Источники"])
+        self.SoursesObjectsTree.setColumnWidth(0, 60) 
 
-        self.listObjectsCheck = QCheckBox("Скрыть/показать")
+        self.AreasObjectsTree.setColumnCount(2)
+        self.AreasObjectsTree.setHeaderLabels(["","Области расчета"])
+        self.AreasObjectsTree.setColumnWidth(0, 60) 
+
+        self.ReceiverObjectsTree.setColumnCount(2)
+        self.ReceiverObjectsTree.setHeaderLabels(["","Приемники"])
+        self.ReceiverObjectsTree.setColumnWidth(0, 60) 
+
+        self.SoursesObjectsTree.itemChanged.connect(lambda a,b:self.ChangeCheckBox(a,b,"sourses"))
+        self.SoursesObjectsTree.itemActivated.connect(lambda a,b:self.OpenObjMenu(a,b,"sourses"))
+
+        self.AreasObjectsTree.itemChanged.connect(lambda a,b:self.ChangeCheckBox(a,b,"areas"))
+        self.AreasObjectsTree.itemActivated.connect(lambda a,b:self.OpenObjMenu(a,b,"areas"))
+
+        
+        #self.SoursesObjectsTree.setEditTriggers(QTreeWidget.DoubleClicked | QTreeWidget.SelectedClicked | QTreeWidget.EditKeyPressed)
 
 
-        self.CheckListlayers = CheckableComboBox()
-        self.CheckListlayers.setCheckEvent(self.OnOffLayers)
+        # Dictionaries for all user objects
+        self.SoursesObjectsDict = {}
+        self.AreasObjectsDict = {}
+        self.ReceiverObjectsDict = {}
 
-        self.CheckListAreas = CheckableComboBox()
-        #self.CheckListAreas.setCheckEvent(self.OnOffLayers)
-                
+        self.SoursesObjectsChildren = {}
+        self.AreasObjectsChildren = {}
+        self.ReceiverObjectsChildren = {}
+
         
         ListObjectsHeader = QHeaderView(Qt.Horizontal)
 
-        self.listObjects.header().resizeSection(0, 10)
+        #self.calcObjects.doubleClicked.connect(self.OpenCalcMenu)
+        #self.calcObjects.clicked[QModelIndex].connect(self.SelectCalc)
 
-        self.listObjects.doubleClicked.connect(self.OpenObjMenu)
-        self.listObjects.clicked[QModelIndex].connect(self.SelectObjects)
 
-        self.calcObjects.doubleClicked.connect(self.OpenCalcMenu)
-        self.calcObjects.clicked[QModelIndex].connect(self.SelectCalc)
-
+        # Left pannel with treewidges
         BoxLayout2 = QHBoxLayout()
         BoxLayout2_1 = QVBoxLayout()
-        BoxLayout2_1.addWidget(self.CheckListlayers)
-        BoxLayout2_1.addWidget(self.listObjectsCheck)
-        BoxLayout2_1.addWidget(self.listObjects)
-        BoxLayout2_1.addWidget(self.CheckListAreas)
-        BoxLayout2_1.addWidget(self.calcObjects)
+        BoxLayout2_1.addWidget(self.SoursesObjectsTree)
+        BoxLayout2_1.addWidget(self.AreasObjectsTree)
+        BoxLayout2_1.addWidget(self.ReceiverObjectsTree)
+
+
         BoxLayout2.addLayout(BoxLayout2_1)
         LeftPanelFrame.setLayout(BoxLayout2) 
 
 
+        
         SceneFrame = QFrame() 
         SceneFrame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding) 
         #SceneFrame.setMinimumSize(QSize(0, 100))
 
-        self.listObjectsDict = {}
+        self.status_string = self.statusBar() #.showMessage('Ready')
 
-        self.scene = GraphicsScene(self) #QGraphicsScene()
-        self.view = GraphicsView(self.get_obj_for_resize)
+        pic = QPixmap("images/%s.png" % ("gpu" if cuda_available() else "cpu"))
+        scaled=pic.scaled(31, 20, Qt.IgnoreAspectRatio, Qt.FastTransformation)
+        label = QLabel()
+        label.setPixmap(scaled)
+        Phbox = QHBoxLayout(self)
+        Phbox.addWidget(label)
+        Phbox.setContentsMargins(0,0,4,4)
+
+        Pct = QWidget()
+        #Pct.setStyleSheet("background-color: red")
+        #Pct.setStyleSheet ("border: 1px solid red")
+        Pct.setLayout(Phbox)
+ 
+        self.status_string.addPermanentWidget(Pct)
+
+        cords_string = lambda x,y: self.status_string.showMessage(f"x: {x}, y: {y}")
+
+        self.scene = GraphicsScene() #QGraphicsScene()
+        self.view = GraphicsView(self.SoursesObjectsDict, self.AreasObjectsDict, cords_string)
         self.view.setMouseTracking(True)
  
 
@@ -263,6 +395,14 @@ class Screen(QMainWindow):
         self.tab.addTab(self.view,"Модель")
         self.fig = plt.figure(dpi=75)
         self.Canv = FigureCanvas(self.fig)
+
+        self.rbf = None
+
+        self.Canv.setFocusPolicy(Qt.ClickFocus)
+        self.Canv.setFocus()
+
+        #self.fig.canvas.mpl_connect('button_press_event', self.on_mouse_move)
+        self.fig.canvas.mpl_connect('motion_notify_event', self.on_mouse_move)
         
 
 
@@ -325,50 +465,58 @@ class Screen(QMainWindow):
         fileMenu.addAction(SaveObjAction)
 
 
-        RunCalcAction = QAction('Расчёт', self)
-        RunCalcAction.setShortcut('Ctrl+R')
-        RunCalcAction.triggered.connect(lambda:self.Run_calc_area(tc=None)) 
-        fileMenu.addAction(RunCalcAction)
- 
-        #self.button = QPushButton('Сохранить', self)
-        #self.button.clicked.connect()
+        #CorrectMenu = menubar.addMenu('&Правка')
 
-        CorrectMenu = menubar.addMenu('&Правка')
+ 
+        SourceMenu = menubar.addMenu('&Источники')
+
+        NewLayerAction_1 = QAction('Добавить слой', self)
+        #NewLayerAction.setShortcut('Ctrl+R')
+        NewLayerAction_1.triggered.connect(lambda:self.AddObj("sourses","layer")) 
+        SourceMenu.addAction(NewLayerAction_1)
 
         NewReactorAction = QAction('Добавить реактор', self)
         NewReactorAction.setShortcut('Ctrl+R')
-        NewReactorAction.triggered.connect(lambda: self.AddObj("reactor")) 
-        CorrectMenu.addAction(NewReactorAction)
+        NewReactorAction.triggered.connect(lambda:self.AddObj("sourses","reactor"))
+        SourceMenu.addAction(NewReactorAction)
 
         NewWireAction = QAction('Добавить шину', self)
         NewWireAction.setShortcut('Ctrl+W')
-        NewWireAction.triggered.connect(lambda: self.AddObj("conductor")) 
-        CorrectMenu.addAction(NewWireAction)
+        NewWireAction.triggered.connect(lambda:self.AddObj("sourses","conductor"))
+        SourceMenu.addAction(NewWireAction)
 
-        DelObjectAction = QAction('Удалить объект', self)
+        DelObjectAction = QAction('Удалить', self)
         DelObjectAction.setShortcut('Ctrl+D')
-        DelObjectAction.triggered.connect(self.DelObj) 
-        CorrectMenu.addAction(DelObjectAction)
+        DelObjectAction.triggered.connect(lambda:self.DelObj("sourses")) 
+        SourceMenu.addAction(DelObjectAction)
+
+
+        AreaMenu = menubar.addMenu('&Области')
+
+        NewLayerAction_2 = QAction('Добавить слой', self)
+        #NewLayerAction_2.setShortcut('Ctrl+R')
+        NewLayerAction_2.triggered.connect(lambda: self.AddObj("areas","layer")) 
+        AreaMenu.addAction(NewLayerAction_2)
 
         NewHorizCalcAction = QAction('Горизонтальная область расчёта', self)
         NewHorizCalcAction.setShortcut('Ctrl+H')
-        NewHorizCalcAction.triggered.connect(lambda: self.AddCalcObj("H_calc_area")) 
-        CorrectMenu.addAction(NewHorizCalcAction)
+        NewHorizCalcAction.triggered.connect(lambda: self.AddObj("areas","horizontal_area")) 
+        AreaMenu.addAction(NewHorizCalcAction)
 
         NewVertCalcAction = QAction('Вертикальная область расчёта', self)
         NewVertCalcAction.setShortcut('Ctrl+G')
-        NewVertCalcAction.triggered.connect(lambda: self.AddCalcObj("V_calc_area")) 
-        CorrectMenu.addAction(NewVertCalcAction)
+        NewVertCalcAction.triggered.connect(lambda: self.AddObj("areas","vertical_area")) 
+        AreaMenu.addAction(NewVertCalcAction)
 
         NewPointCalcAction = QAction('Расчётная точка в пространстве', self)
         NewPointCalcAction.setShortcut('Ctrl+J')
-        NewPointCalcAction.triggered.connect(lambda: self.AddCalcObj("O_calc_point")) 
-        CorrectMenu.addAction(NewPointCalcAction)
+        NewPointCalcAction.triggered.connect(lambda: self.AddObj("areas","one_point")) 
+        AreaMenu.addAction(NewPointCalcAction)
 
-        DelCalcAction = QAction('Удалить параметры расчёта', self)
+        DelCalcAction = QAction('Удалить', self)
         DelCalcAction.setShortcut('Ctrl+K')
-        DelCalcAction.triggered.connect(self.DelCalcObj) 
-        CorrectMenu.addAction(DelCalcAction)
+        DelCalcAction.triggered.connect(lambda:self.DelObj("areas")) 
+        AreaMenu.addAction(DelCalcAction)
 
 
         ResultMenu = menubar.addMenu('&Результаты')
@@ -383,52 +531,53 @@ class Screen(QMainWindow):
         SavePlotAction.triggered.connect(self.SavePlot) 
         ResultMenu.addAction(SavePlotAction)
 
+        RunCalcAction = QAction('Расчёт', self)
+        RunCalcAction.setShortcut('Ctrl+R')
+        RunCalcAction.triggered.connect(self.Run_area) 
+        ResultMenu.addAction(RunCalcAction)
+
+
+        settingsMenu = menubar.addMenu('&Настройки')
+
+        self.fl_state = "fl32"
+
+        FloatTypeGroup = QActionGroup(self)
+        FloatTypeGroup.setExclusive(True)
+        fl32 = QAction('float32', self)
+        fl32.setCheckable(True)
+        fl32.setChecked(True)
+        fl64 = QAction('float64', self)
+        fl64.setCheckable(True)
+        FloatTypeGroup.addAction(fl32)
+        FloatTypeGroup.addAction(fl64)
+        FloatTypeGroup.triggered.connect(lambda x:setTypes(x.text()))     
+
+        settingsMenu.addAction(fl32)
+        settingsMenu.addAction(fl64)
 
         Splitter1 = QSplitter(Qt.Horizontal) 
         Splitter1.addWidget(LeftPanelFrame)
         Splitter1.addWidget(SceneFrame)
         Splitter1.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         Splitter1.setStretchFactor(1, 4) 
- 
-        
-
-        
+   
         vbox = QVBoxLayout(self)
         vbox.addWidget(Splitter1)
         self.central_widget = QWidget()
         self.central_widget.setLayout(vbox)
         self.setCentralWidget(self.central_widget) 
 
-        self.listObjectsDict = {}
-        self.linksObjectsDict = {}
-        self.calcObjectsDict = {}
-        self.LayersDict = {}
-        self.LayersDict["Main"] = [True,set()]
-        self.CheckListlayers.addItem("Main")
-        self.CheckListlayers.setItemState("Main",True)
-        self.CheckListlayers.isCheckFunc = True
-        self.obj_id=0
-        self.calc_id=0
 
-        self.listObjectsModel = QStandardItemModel(0, 2)
-        self.listObjectsModel.itemChanged.connect(self.ChangeCheckObjects)
-        self.listObjectsModel.setHorizontalHeaderLabels(["","Имя"])
-        self.current_obj_index = None
-
-        self.listObjects.setModel(self.listObjectsModel)
-        self.listObjects.setColumnWidth(0, 40)
-
-        self.calcObjectsModel = QStandardItemModel(0, 2)
-        self.calcObjectsModel.itemChanged.connect(self.ChangeCheckCalc)
-        self.calcObjectsModel.setHorizontalHeaderLabels(["","Имя"])
-        self.current_calc_index = None
-
-        self.calcObjects.setModel(self.calcObjectsModel)
-        self.calcObjects.setColumnWidth(0, 40)
+    def on_mouse_move(self,click):
+        x, y = click.xdata, click.ydata
+        if self.rbf is not None and x is not None and y is not None:
+            x, y = np.around(x, 3), np.around(y, 3)
+            H  = np.around(self.rbf(x,y))
+            self.status_string.showMessage(f"x: {x}, y: {y}, H: {H}")
 
     def SavePlot(self):
         try:
-            fname = QFileDialog.getSaveFileName(self, 'Сохранить файл', self.path_home,'*.jpg;;*.png;;*.pdf;;*.svg;;*.eps')
+            fname = QFileDialog.getSaveFileName(self, 'Сохранить файл', self.path_home,'*.png;;*.png;;*.pdf;;*.svg;;*.eps')
 
             #self.fig.set_size_inches(4, 4,forward=True) # Изменяем размер сохраняемого графика
             self.fig.savefig(fname[0], format=fname[1][2:], dpi=300) # Cохраняем графики
@@ -469,8 +618,6 @@ class Screen(QMainWindow):
 
             if color.isValid():
                 self.table_contour.item(row,2).setBackground(color)
-                #print(color.greenF())
-                #print(color.name())
                 self.SetCountur(row,1)
 
     def SetCountur(self,row,col,tc=None):
@@ -558,116 +705,122 @@ class Screen(QMainWindow):
         except Exception as ex:
             print(ex)
 
-    def ShowCanvas(self,SpaceCord,H_area,area_calc,z,tp, tc=None):
-        H_area = np.linalg.norm(H_area,axis=1)
-        self.fig.clear()
-        sp_levels = []
-     
-        if tp == "H_calc_area":
-            X,Y = SpaceCord
+    def ShowCanvas(self,SpaceCord,H_area,area, tc=None):
+        try:
+            self.Ind.setLabelText("Создаётся график")
+            self.Ind.reset()
+            tp, area_calc, z = area[:3]
 
-            xi, yi = np.linspace(X.min(), X.max(), 100), np.linspace(Y.min(), Y.max(), 100)
-            xi, yi = np.meshgrid(xi, yi)
-
-            rbf = scipy.interpolate.Rbf(X, Y, H_area, function='linear')
-            zi = rbf(xi, yi)
-
-            ax = self.fig.add_subplot(111) #
-            
-
-            im=ax.imshow(zi, vmin=H_area.min(), vmax=H_area.max(), origin='lower',extent=[X.min(), X.max(), Y.min(), Y.max()]) #
-            cl = self.fig.colorbar(im)
-            cl.set_label('H, А/м',verticalalignment = "top", x=-20) #, rotation=270 #,position=(20,0)
-
-            self.make_contur = lambda l, c: ax.contour(xi, yi, zi, levels = l, colors = c )
-
-            for k in self.d_contur:
-                self.d_contur[k][1]=None
-                if tc is None:
-                    self.SetCountur(k,0)
-                elif tc == 1:
-                    sp_levels += self.SetCountur(k,0,tc=tc)
-
-            
-            
-            ax.set_xlabel(u'X, м') # Подпись оси х ,fontsize=self.shr_gr
-            ax.set_ylabel(u'Y, м') # Подпись оси у ,fontsize=self.shr_gr
-            #ax.set_title("Тест\n") #,fontsize=self.shr_gr
-
-            if tc is None:
-                self.Canv.draw() # Выводим график в виджет
-                self.tab.setCurrentIndex(1) # Делаем активной созданую закладку
-
-            elif tc == 1:
-                return sp_levels
-
+            H_area = np.linalg.norm(H_area,axis=1)
+            self.fig.clear()
+            sp_levels = []
         
-        elif tp == "V_calc_area" and tc is None:
-            X,Y,Z = SpaceCord
+            if tp == "horizontal_area":
+                X,Y = SpaceCord
 
-            if area_calc[2]-area_calc[0]>=area_calc[3]-area_calc[1]:
-                 
-                ax1 = self.fig.gca()
+                xi, yi = np.linspace(X.min(), X.max(), 100), np.linspace(Y.min(), Y.max(), 100)
+                xi, yi = np.meshgrid(xi, yi)
+
+                self.rbf = scipy.interpolate.Rbf(X, Y, H_area, function='linear') #'inverse'
+                zi = self.rbf(xi, yi)
+
+                ax = self.fig.add_subplot(111) #
                 
-                
-                # Создание графика
-                xi, zi = np.linspace(X.min(), X.max(), 100), np.linspace(Z.min(), Z.max(), 100)
-                xi, zi = np.meshgrid(xi, zi)
 
-                rbf = scipy.interpolate.Rbf(X, Z, H_area, function='linear')
-                hi = rbf(xi, zi)
+                im=ax.imshow(zi, vmin=H_area.min(), vmax=H_area.max(), cmap='jet', norm=LogNorm(), origin='lower',extent=[X.min(), X.max(), Y.min(), Y.max()]) #H_area.max()
+                cl = self.fig.colorbar(im)
+                cl.set_label('H, А/м',verticalalignment = "top", x=-20) #, rotation=270 #,position=(20,0)
 
-                im = ax1.imshow(hi, vmin=H_area.min(), vmax=H_area.max(), origin='lower',extent=[X.min(), X.max(), Z.min(), Z.max()],aspect="auto") #
-                self.make_contur = lambda l, c: ax1.contour(xi, zi, hi, levels = l, colors = c )
+                self.make_contur = lambda l, c: ax.contour(xi, yi, zi, levels = l, colors = c )
 
                 for k in self.d_contur:
                     self.d_contur[k][1]=None
-                    self.SetCountur(k,0)
+                    if tc is None:
+                        self.SetCountur(k,0)
+                    elif tc == 1:
+                        sp_levels += self.SetCountur(k,0,tc=tc)
 
-                if area_calc[3]-area_calc[1]>0.05:
-                    ax2 = ax1.twiny()
-                    ax2.set_xlim([Y.min(),Y.max()])
-                    ax2.set_xlabel(u'Y, м\n') # Подпись оси у ,fontsize=self.shr_gr
-               
-                ax1.set_xlabel(u'X, м') # Подпись оси х ,fontsize=self.shr_gr
-                ax1.set_ylabel(u'Z, м') # Подпись оси у ,fontsize=self.shr_gr
                 
-            else:
-                if area_calc[2]-area_calc[0]>0.05:
-                    ax1 = self.fig.gca()
-                    ax2 = ax1.twiny()
-                else:
-                    ax2 = self.fig.gca()
-
-                xi, zi = np.linspace(Y.min(), Y.max(), 100), np.linspace(Z.min(), Z.max(), 100)
-                xi, zi = np.meshgrid(xi, zi)
-
-                rbf = scipy.interpolate.Rbf(Y, Z, H_area, function='linear')
-                hi = rbf(xi, zi)
-
-                im = ax2.imshow(hi, vmin=H_area.min(), vmax=H_area.max(), origin='lower',
-                        extent=[Y.min(), Y.max(), Z.min(), Z.max()],aspect="auto")
-                self.make_contur = lambda l, c: ax2.contour(xi, zi, hi, levels = l, colors = c)
-
-                for k in self.d_contur:
-                    self.d_contur[k][1]=None
-                    self.SetCountur(k,0)
                 
-                if area_calc[2]-area_calc[0]>0.05:
-                    ax1.set_xlim([X.min(),X.max()])
-                    ax1.set_xlabel(u'X, м') 
-                
-                ax2.set_xlabel(u'Y, м\n')
-                ax2.set_ylabel(u'Z, м') # Подпись оси у ,fontsize=self.shr_gr
+                ax.set_xlabel(u'X, м') # Подпись оси х ,fontsize=self.shr_gr
+                ax.set_ylabel(u'Y, м') # Подпись оси у ,fontsize=self.shr_gr
+                #ax.set_title("Тест\n") #,fontsize=self.shr_gr
 
-            cl = self.fig.colorbar(im)
-            cl.set_label('H, А/м',verticalalignment = "top", x=-20) #, rotation=270 #,position=(20,0)
+                if tc is None:
+                    self.Canv.draw() # Выводим график в виджет
+                    self.tab.setCurrentIndex(1) # Делаем активной созданую закладку
+
+                elif tc == 1:
+                    return sp_levels
 
             
+            elif tp == "vertical_area" and tc is None:
+                X,Y,Z = SpaceCord
 
-            self.Canv.draw() # Выводим график в виджет
+                if area_calc[2]-area_calc[0]>=area_calc[3]-area_calc[1]:
+                    
+                    ax1 = self.fig.gca()
+                    
+                    
+                    # Создание графика
+                    xi, zi = np.linspace(X.min(), X.max(), 100), np.linspace(Z.min(), Z.max(), 100)
+                    xi, zi = np.meshgrid(xi, zi)
 
-            self.tab.setCurrentIndex(1)
+                    self.rbf = scipy.interpolate.Rbf(X, Z, H_area, function='linear')
+                    hi = self.rbf(xi, zi)
+
+                    im = ax1.imshow(hi, vmin=H_area.min(), vmax=H_area.max(), cmap='jet', norm=LogNorm(), origin='lower',extent=[X.min(), X.max(), Z.min(), Z.max()],aspect="auto") #
+                    self.make_contur = lambda l, c: ax1.contour(xi, zi, hi, levels = l, colors = c )
+
+                    for k in self.d_contur:
+                        self.d_contur[k][1]=None
+                        self.SetCountur(k,0)
+
+                    if area_calc[3]-area_calc[1]>0.05:
+                        ax2 = ax1.twiny()
+                        ax2.set_xlim([Y.min(),Y.max()])
+                        ax2.set_xlabel(u'Y, м\n') # Подпись оси у ,fontsize=self.shr_gr
+                
+                    ax1.set_xlabel(u'X, м') # Подпись оси х ,fontsize=self.shr_gr
+                    ax1.set_ylabel(u'Z, м') # Подпись оси у ,fontsize=self.shr_gr
+                    
+                else:
+                    if area_calc[2]-area_calc[0]>0.05:
+                        ax1 = self.fig.gca()
+                        ax2 = ax1.twiny()
+                    else:
+                        ax2 = self.fig.gca()
+
+                    xi, zi = np.linspace(Y.min(), Y.max(), 100), np.linspace(Z.min(), Z.max(), 100)
+                    xi, zi = np.meshgrid(xi, zi)
+
+                    self.rbf = scipy.interpolate.Rbf(Y, Z, H_area, function='linear')
+                    hi = self.rbf(xi, zi)
+
+                    im = ax2.imshow(hi, vmin=H_area.min(), vmax=H_area.max(), origin='lower',
+                            extent=[Y.min(), Y.max(), Z.min(), Z.max()],aspect="auto")
+                    self.make_contur = lambda l, c: ax2.contour(xi, zi, hi, levels = l, colors = c)
+
+                    for k in self.d_contur:
+                        self.d_contur[k][1]=None
+                        self.SetCountur(k,0)
+                    
+                    if area_calc[2]-area_calc[0]>0.05:
+                        ax1.set_xlim([X.min(),X.max()])
+                        ax1.set_xlabel(u'X, м') 
+                    
+                    ax2.set_xlabel(u'Y, м\n')
+                    ax2.set_ylabel(u'Z, м') # Подпись оси у ,fontsize=self.shr_gr
+
+                cl = self.fig.colorbar(im)
+                cl.set_label('H, А/м',verticalalignment = "top", x=-20) #, rotation=270 #,position=(20,0)
+
+                self.Canv.draw() # Выводим график в виджет
+                self.tab.setCurrentIndex(1)
+
+            #self.Ind.close()
+        except Exception as ex:
+            print("ShowCanvas",ex)
 
     def ProgresCalc(self):
         Ind = QProgressDialog('Производится расчёт','Отмена', 0, 0, self)
@@ -677,34 +830,88 @@ class Screen(QMainWindow):
         Ind.setAutoClose(True)
         Ind.show()
         return Ind
-        
 
+    def createSignals(self):
+        setNewSignal = lambda x: self.Ind.setValue(x)
+        setStopSignal = lambda x: self.Ind.canceled.connect(x)
+        setRange = lambda x,y: self.Ind.setRange(x,y)
+        return (setStopSignal,setRange,setNewSignal)     
+
+    def get_object_data(self):
+        try:
+            lst = []
+            for obj in self.SoursesObjectsDict.values():
+                if obj.type_link=="object":
+                    if obj.type_object == "reactor" and obj.state:
+                        lst.append(obj.graphic_item.menu.data.read_data())
+                        
+                    elif obj.type_object == "conductor" and obj.state:
+                        lst.append(obj.graphic_item.menu.data.read_data())
+
+            return lst
+        except Exception as ex:
+            print(ex)
+
+    def Run_area(self):
+        tree= self.AreasObjectsTree
+        ObjDict, ObjChildren = self.AreasObjectsDict, self.AreasObjectsChildren
+        item = tree.selectedItems()
+        if len(item) != 1: return
+        else: item = item[0]
+
+        print(item)
+
+        obj = ObjDict[item]
+        if obj.type_link != "object" or (obj.type_link == "object" and obj.type_object == "one_point"):
+            return
+
+        area = obj.graphic_item.menu.data.read_data()
+        sourses = self.get_object_data()
+
+        self.Ind = self.ProgresCalc()
+        print("start")
+        run_area_calc(sourses,area, callback_func = (lambda S, H :self.ShowCanvas(S,H,area),self.createSignals()))#self.Ind
+
+    def PointCalc(self, who, data=None):
+        if who == "sourses":
+            sourses = self.get_object_data()
+
+            points = []
+            for obj in self.AreasObjectsDict.values():
+                if obj.type_link=="object":
+                    if obj.type_object == "one_point" and obj.state:
+                        points.append(obj.graphic_item.menu.data.read_data())
+        
+        elif who == "":
+            sourses = self.get_object_data()
+            points = [data.read_data()]
+
+        print("end_move")
+        
 
     def Run_calc_area(self, tc=None, dnn=None,fname=None):
         lst = []
-        if tc==1:
-            sp_obj = []
+
+        for obj in self.SoursesObjectsDict.values():
+            if obj.type_link=="object":
+                if obj.type_object == "reactor" and obj.state:
+                    obj.graphic_item.menu.InitCords()
+                    lst.append(obj.graphic_item.menu.data)
+                    
+                elif obj.type_object == "conductor" and obj.state:
+                    obj.graphic_item.menu.InitCords()
+                    lst.append(obj.graphic_item.menu.data)
+
         
-        try:
-            for i in self.listObjectsDict.values():
-                if i[0]=="name":
-                    if i[3].menu.data["obj_type"] == "reactor" and not i[4]:
-                        x, y, r = i[3].getPos()
-                        i[3].menu.data["X"], i[3].menu.data["Y"], i[3].menu.data['Rnar'] = str(round(x/1000,3)), str(round(y/1000,3)), str(round(r/1000,3))
-                        lst.append(i[3].menu.data)
+        """ try:
+            
+            
+        self.type_link = type_link
+        self.type_object = type_object
+        self.graphic_item = graphic_item
+        self.movable = movable
+        self.state = state
 
-                        if tc==1:
-                            sp_obj.append(["reactor",x, y, r])
-                        
-                    elif i[3].menu.data["obj_type"] == "conductor" and not i[4]:
-                        cord = i[3].getPos()
-                        for j in range(len(cord)):
-                            i[3].menu.data["tbl_cord"][j][0] = str(round(cord[j][0]/1000,3))
-                            i[3].menu.data["tbl_cord"][j][1] = str(round(-cord[j][1]/1000,3))
-                        lst.append(i[3].menu.data)
-
-                        if tc==1:
-                            sp_obj.append(["conductor",cord])
 
             if tc is None:
                 for j,i in self.calcObjectsDict.items():
@@ -783,581 +990,467 @@ class Screen(QMainWindow):
 
                 dxf.SaveInDXF(sp_points,sp_levels,sp_obj,fname)
 
+        except Exception as ex:
+            print('aaaaa',ex) """
+
             
-
-        except Exception as ex:
-            print('aaaaa',ex)
-
-    def get_obj_for_resize(self):
-        return self.listObjectsDict, self.calcObjectsDict
-
-    def OpenObjMenu(self,modelindex):
+    def ChangeCheckBox(self,item,colum,type_tree):
+        """ Check state control """
         try:
-            id_obj = self.linksObjectsDict[QPersistentModelIndex(modelindex)]
-            if self.listObjectsDict[id_obj][0] == "name":
-                self.listObjectsDict[id_obj][3].menu.show()
+            if type_tree == "sourses":
+                if colum == 0:
+                    t = self.SoursesObjectsDict[item].type_link
+                    state = item.checkState(0)
+                    if t == "object":
+                        if state == Qt.Checked:
+                            self.scene.addItem(self.SoursesObjectsDict[item].graphic_item)
+                            self.SoursesObjectsDict[item].state= True
+                        else:
+                            self.scene.removeItem(self.SoursesObjectsDict[item].graphic_item)
+                            self.SoursesObjectsDict[item].state = False
+                    elif t == "layer":
+                        if state == Qt.Checked:
+                            for child in self.SoursesObjectsChildren[item]:
+                                child.setCheckState(0, Qt.Checked)
+                        else:
+                            for child in self.SoursesObjectsChildren[item]:
+                                child.setCheckState(0, Qt.Unchecked)
+
+            elif type_tree == "areas":
+                if colum == 0:
+                    t = self.AreasObjectsDict[item].type_link
+                    state = item.checkState(0)
+                    if t == "object":
+                        if state == Qt.Checked:
+                            self.scene.addItem(self.AreasObjectsDict[item].graphic_item)
+                            self.AreasObjectsDict[item].state = True
+                        else:
+                            self.scene.removeItem(self.AreasObjectsDict[item].graphic_item)
+                            self.AreasObjectsDict[item].state = False
+                    elif t == "layer":
+                        if state == Qt.Checked:
+                            for child in self.AreasObjectsChildren[item]:
+                                child.setCheckState(0, Qt.Checked)
+                        else:
+                            for child in self.AreasObjectsChildren[item]:
+                                child.setCheckState(0, Qt.Unchecked)
         except Exception as ex:
-            print(ex)
+            print(ex,"ChangeCheckBox")
+                    
+    
+    def OpenObjMenu(self,item,colum,type_tree):
+        if type_tree == "sourses": obj = self.SoursesObjectsDict
+        elif type_tree == "areas": obj = self.AreasObjectsDict
 
-    def OpenCalcMenu(self,modelindex):
-        id_obj = QPersistentModelIndex(modelindex)
-        if self.calcObjectsDict[id_obj][0] == "name":
-            self.calcObjectsDict[id_obj][3].menu.show()
+        if obj[item].type_link == "object" and colum == 1:
+            obj[item].graphic_item.menu.show()
 
-    def SelectObjects(self,modelindex):
-        self.current_obj_index = modelindex
-    def SelectCalc(self,modelindex):
-        self.current_calc_index = modelindex
-
-    def ChangeCheckObjects(self,modelindex):
+    def AddObj(self, type_tree, type_obj):
         try:
-            self.current_obj_index = modelindex.index()
-            row = self.listObjectsDict[self.linksObjectsDict[QPersistentModelIndex(self.current_obj_index)]]
-            if row[0]=="check":
-                if row[3].checkState() == Qt.Checked:
-                    self.scene.addItem(self.listObjectsDict[row[2]][3])
-                    self.listObjectsDict[row[2]][4] = False
-                elif row[3].checkState() == Qt.Unchecked:
-                    self.scene.removeItem(self.listObjectsDict[row[2]][3])
-                    self.listObjectsDict[row[2]][4] = True
-        except Exception as ex:
-            print(ex)
+            self.BlockSignals(True)
 
+            if type_tree == "sourses": 
+                tree, link = self.SoursesObjectsTree, "images/sourse.png"
+                ObjDict, ObjChildren = self.SoursesObjectsDict, self.SoursesObjectsChildren
+            elif type_tree == "areas": 
+                tree, link = self.AreasObjectsTree, "images/area.png"
+                ObjDict, ObjChildren = self.AreasObjectsDict, self.AreasObjectsChildren
 
-    def ChangeCheckCalc(self,modelindex):
-        #ChekItem.setCheckState(check)
-        self.current_calc_index = modelindex.index()
-        curren_obj = QPersistentModelIndex(self.current_calc_index)
-        try:
-            row = self.calcObjectsDict[curren_obj]
-            if row[0]=="check":
-                if row[1].checkState() == Qt.Checked:
-                    self.scene.addItem(self.calcObjectsDict[row[2]][3])
-                    self.calcObjectsDict[row[2]][4] = True
-                    for i in self.calcObjectsDict:
-                        r = self.calcObjectsDict[i]
-                        if curren_obj != i and r[0] == "check":
-                            if r[1].checkState() == Qt.Checked:
-                                r[1].setCheckState(Qt.Unchecked)
-                                self.calcObjectsDict[r[2]][4] = False
+            item = tree.selectedItems()
+            if type_obj =="layer" : item = None
+            elif len(item)>1: return
+            else: item = item[0]
 
-                    if self.calcObjectsDict[row[2]][3].menu.data["obj_type"] == "O_calc_point":
-                        self.calcObjectsDict[row[2]][3].CalcWhenShow()
+            if type_obj =="layer":
+                parent = TreeWidgetItem(tree, ["","new_layer"])
+                parent.setFlags(parent.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEditable)
+                parent.setCheckState(0, Qt.Unchecked)
+                parent.setIcon(1,QIcon(link))
 
-                elif row[1].checkState() == Qt.Unchecked:
-                    self.scene.removeItem(self.calcObjectsDict[row[2]][3])
-                    self.calcObjectsDict[row[2]][4] = False
-        except Exception as ex:
-            print(ex)
-        
-    def OnOffLayers(self,key,state):
-        #print(key,state)
-        try:
-            self.LayersDict[key][0] = state
-            for i in self.LayersDict[key][1]:
-                if state:
-                    if not self.listObjectsDict[i][5]:
-                        self.listObjectsDict[i][5] = state
-                        if self.listObjectsDict[i][4]:
-                            self.listObjectsDict[i][4] = False
-                            #print(self.listObjectsDict[i][3].hndl)
-                            self.scene.addItem(self.listObjectsDict[i][3])
+                ObjDict[parent] = Atributs()
+                ObjChildren[parent] = set()
 
-                        check_id = self.listObjectsDict[i][2]
-                        a = self.listObjectsDict[check_id][1].clone()
-                        b = self.listObjectsDict[i][1].clone()
-                        self.listObjectsModel.appendRow([a,b])
-                        self.linksObjectsDict[QPersistentModelIndex(a.index())] = check_id
-                        self.linksObjectsDict[QPersistentModelIndex(b.index())] = i
-
-                        self.listObjectsDict[check_id][3] = a
-                        self.listObjectsDict[i][6] = b
-
-                        self.listObjectsDict[i][3].menu.setListName = (lambda ListItem, Circle :(lambda :ListItem.setText(Circle.menu.data["name"])))(b, self.listObjectsDict[i][3])
-
-                        b.setText(self.listObjectsDict[i][3].menu.data["name"])                  
-
-                else:
-                    if self.listObjectsDict[i][5]:
-                        self.listObjectsDict[i][5] = state
-                        if not self.listObjectsDict[i][4]:
-                            self.listObjectsDict[i][4] = True
-                            self.scene.removeItem(self.listObjectsDict[i][3])
-
-                        check_id = self.listObjectsDict[i][2]
-
-                        del self.linksObjectsDict[QPersistentModelIndex(self.listObjectsDict[i][6].index())]
-                        del self.linksObjectsDict[QPersistentModelIndex(self.listObjectsDict[check_id][3].index())]
-
-                        self.listObjectsModel.removeRow(self.listObjectsDict[i][6].row())
-           
-        except Exception as ex:
-            print(ex)
-
-    def DelObj(self):
-        try:
-            if self.current_obj_index is None: return
-            link = self.linksObjectsDict[QPersistentModelIndex(self.current_obj_index)]
-            if self.listObjectsDict[link][0] == "name":
-                name_id = link
-                check_id = self.listObjectsDict[link][2]
             else:
-                check_id = link
-                name_id = self.listObjectsDict[link][2]
+                rect  = self.view.mapToScene(self.view.rect()).boundingRect()
+                wd, hg = rect.width()/4, rect.height()/4
+                cx,cy = rect.center().x(),rect.center().y()
 
-            if self.listObjectsDict[name_id][4]:
-                self.scene.removeItem(self.listObjectsDict[name_id][3])
+                if ObjDict[item].type_link != "layer": item = item.parent()
 
-            del self.linksObjectsDict[QPersistentModelIndex(self.listObjectsDict[name_id][6].index())]
-            del self.linksObjectsDict[QPersistentModelIndex(self.listObjectsDict[check_id][3].index())]
+                if type_obj == "reactor": 
+                    DrawObj = GraphicsCircleItem((cx,cy,wd),calc_func=self.PointCalc)
+                    link_obj = "images/reactor.png"
+                elif type_obj == "conductor": 
+                    DrawObj = GraphicsPolylineItem([[cx-wd,cy-hg],[cx+wd,cy+hg]],calc_func=self.PointCalc)
+                    link_obj = "images/conductor.png"
+                elif type_obj == "horizontal_area": 
+                    DrawObj = GraphicsRectItem((cx-wd,cy-hg,cx+wd,cy+hg))
+                    link_obj = "images/rectangle.png"
+                elif type_obj == "vertical_area": 
+                    DrawObj = GraphicsLineItem((cx-wd,cy-hg,cx+wd,cy+hg))
+                    link_obj = "images/line.png" 
+                elif type_obj == "one_point": 
+                    DrawObj = OneCalcCircle((cx,cy), calc_func=self.PointCalc)
+                    link_obj = "images/point.png"
 
-            self.listObjectsModel.removeRow(self.listObjectsDict[name_id][6].row())
+                child = TreeWidgetItem(["","new_obj"])
+                child.setFlags(child.flags() | Qt.ItemIsUserCheckable)
+                child.setCheckState(0, Qt.Unchecked)
+                child.setIcon(1,QIcon(link_obj))
+                item.addChild(child)
 
-            del self.listObjectsDict[name_id]
-            del self.listObjectsDict[check_id]
+                DrawObj.hndl*=1/self.view.current_scale  
+                DrawObj.updateHandlesPos()
+                DrawObj.menu.data.name = "new_obj"
+                DrawObj.menu.setListName = self.Callbackname(child,DrawObj)
 
-            for k in self.LayersDict:    
-                self.LayersDict[k][1].discard(name_id)
+                ObjDict[child] = Atributs(type_link="object",type_object=type_obj, graphic_item=DrawObj)  
+                ObjChildren[item].add(child)
+
+            self.BlockSignals(False)
         except Exception as ex:
-            print(ex)
+            print("AddObj",ex)
 
-
-    def DelCalcObj(self,al=False):
+    
+    def DelObj(self,type_tree):
         try:
-            if not al:
-                if self.current_calc_index is None: return
-                link = QPersistentModelIndex(self.current_calc_index)
-                if self.calcObjectsDict[link][0] == "name":
-                    name_id = link
-                    check_id = self.calcObjectsDict[link][2]
-                else:
-                    check_id = link
-                    name_id = self.calcObjectsDict[link][2]
+            if type_tree == "sourses": 
+                tree= self.SoursesObjectsTree
+                ObjDict, ObjChildren = self.SoursesObjectsDict, self.SoursesObjectsChildren
+                item = tree.selectedItems()
+                if len(item)>1: return
+                else: item = item[0]
 
+                if ObjDict[item].type_link == "layer":
+                    message_text = f'Вы действительно желаете удалить из "источников" cлой "{item.text(1)}" со всеми его объектами?'
+                elif ObjDict[item].type_link == "object":
+                    message_text = f'Вы действительно желаете удалить из "источников" объект "{item.text(1)}"?'
 
+            elif type_tree == "areas": 
+                tree= self.AreasObjectsTree
+                ObjDict, ObjChildren = self.AreasObjectsDict, self.AreasObjectsChildren
+                item = tree.selectedItems()
+                if len(item)>1: return
+                else: item = item[0]
+
+                if ObjDict[item].type_link == "layer":
+                    message_text = f'Вы действительно желаете удалить из "областей" cлой "{item.text(1)}" со всеми его объектами?'
+                elif ObjDict[item].type_link == "object":
+                    message_text = f'Вы действительно желаете удалить из "областей" объект "{item.text(1)}"?'
+
+            Message = QMessageBox(QMessageBox.Question,  'Удаление',
+                message_text, parent = self)
+            Message.addButton('Да', QMessageBox.YesRole)
+            Message.addButton('Нет', QMessageBox.NoRole)
+            reply = Message.exec()       
+            if reply == 0:
+                if ObjDict[item].type_link == "layer":
+                    for it in ObjChildren[item]:
+                        if ObjDict[it].state:
+                            self.scene.removeItem(ObjDict[it].graphic_item)
+                        del ObjDict[it]
+
+                    tree.takeTopLevelItem(tree.indexOfTopLevelItem(item))
+                    del ObjDict[item]
+                    del ObjChildren[item]
                 
-                if self.calcObjectsDict[name_id][4]:
-                    self.scene.removeItem(self.calcObjectsDict[name_id][3])
+                elif ObjDict[item].type_link == "object":
+                    if ObjDict[item].state:
+                        self.scene.removeItem(ObjDict[item].graphic_item)
+                    
+                    del ObjDict[item]
+                    ObjChildren[item.parent()].remove(item)
+                    parent = item.parent()
+                    parent.takeChild(parent.indexOfChild(item))
 
-                self.calcObjectsModel.removeRow(self.calcObjectsDict[name_id][1].row())
-
-                del self.calcObjectsDict[name_id]
-                del self.calcObjectsDict[check_id]
-
-            else:
-                for name_id in self.calcObjectsDict:
-                    if self.calcObjectsDict[name_id][0] == "name":
-                        check_id = self.calcObjectsDict[name_id][2]
-
-                        if self.calcObjectsDict[name_id][4]:
-                            self.scene.removeItem(self.calcObjectsDict[name_id][3])
-
-                        self.calcObjectsModel.removeRow(self.calcObjectsDict[name_id][1].row())
-
-                self.calcObjectsDict = {}        
-            
         except Exception as ex:
-            print(ex)
+            print("DelObj", ex)
 
 
-    def SaveCalcData(self):
-        try:
-            lst = {}
-            calc = []
-            for i,j in self.listObjectsDict.items():
-                if j[0] == "name":
-                    j[3].menu.InitCords()
-                    lst[i] = j[3].menu.data
+    def BlockSignals(self,trig):
+        self.SoursesObjectsTree.blockSignals(trig)
+        self.AreasObjectsTree.blockSignals(trig)
+        self.ReceiverObjectsTree.blockSignals(trig)
 
-            for i in self.calcObjectsDict.values():
-                if i[0] == "name":
-                    i[3].menu.InitCords()
-                    calc.append(i[3].menu.data)
+    def ClearTrees(self):
+        self.SoursesObjectsTree.clear()
+        self.AreasObjectsTree.clear()
+        self.ReceiverObjectsTree.clear()
 
+        self.SoursesObjectsDict.clear()
+        self.AreasObjectsDict.clear()
+        self.ReceiverObjectsDict.clear()
 
-            fname = QFileDialog.getSaveFileName(self, 'Сохранить файл', self.path_home,'*.pkl')[0]
-            with open( fname, "wb" ) as f:
-                pickle.dump({"obj":lst,"calc":calc,"layers":self.LayersDict}, f)
-        except Exception as ex:
-            print(ex)
-        else:
-            print("good save")
+        self.SoursesObjectsChildren.clear()
+        self.AreasObjectsChildren.clear()
+        self.ReceiverObjectsChildren.clear()
+
+        self.scene.clear()
+
+    @staticmethod
+    def Callbackname(item, draw):
+        return lambda: item.setText(1,draw.menu.data.name)
 
     def LoadCalcData(self):
-        try:
-            fname = QFileDialog.getOpenFileName(self, 'Открыть файл', self.path_home,'*.pkl')[0]
-            with open(fname, "rb" ) as f:
-                data  = pickle.load(f)
+        fname = QFileDialog.getOpenFileName(self, 'Открыть файл', self.path_home,'*.mfc')
+        if fname[0] == "" and  fname[1] == "": return
+        fname = fname[0]
 
-            self.CheckListlayers.isCheckFunc = False
-            #print(1/self.view.current_scale)
-            self.view.scale(1/self.view.current_scale,1/self.view.current_scale)
+        with open(fname, "r", encoding="utf8") as f:
+            data  = json.load(f)
 
-            
-            for key in self.LayersDict:
-                self.OnOffLayers(key,False)
-                self.CheckListlayers.removeItem(key)
-
-            self.listObjectsDict = {}
-            self.linksObjectsDict = {}
-
-            self.DelCalcObj(al=True)
-
-            self.obj_id = max([int(key[5:]) for key in data["obj"]])+1
-
-            wV = self.view.size().width()
-            hV = self.view.size().height()
-
-            xmax, ymax, xmin, ymin  = -float("inf"), -float("inf"), float("inf"), float("inf")
-
-            for i in data["obj"].values():
-                if i["obj_type"]=="reactor":
-                    xmax = max(xmax,float(i["X"])+float(i["Rnar"]))
-                    ymax = max(ymax,float(i["Y"])+float(i["Rnar"]))
-                    xmin = min(xmin,float(i["X"])-float(i["Rnar"]))
-                    ymin = min(ymin,float(i["Y"])-float(i["Rnar"]))
-                    
-
-                elif i["obj_type"]=="conductor":
-                    for j in i["tbl_cord"]:
-                        xmax = max(xmax,float(j[0]))
-                        ymax = max(ymax,float(j[1]))
-                        xmin = min(xmin,float(j[0]))
-                        ymin = min(ymin,float(j[1]))
-
-            scl_layers = min(wV/(xmax-xmin)/1000,hV/(ymax-ymin)/1000) if xmax>-float("inf") and xmin<float("inf") and ymax>-float("inf") and ymin<float("inf") else 1         
-            self.LayersDict = data["layers"]
-            for key in data["layers"]:
-                self.CheckListlayers.addItem(key)
-
-            for i in data["obj"]:
-                if data["obj"][i]["obj_type"]=="reactor":
-                    pen=QPen(QColor(data["obj"][i]['line_color']), 0, Qt.SolidLine)
-                    cl = QColor(data["obj"][i]['body_color'])
-                    cl.setAlpha(100)
-                    brush=QBrush(cl)
-                    Circle = GraphicsCircleItem((float(data["obj"][i]["X"])*1000,-float(data["obj"][i]["Y"])*1000,float(data["obj"][i]["Rnar"])*1000),pen,brush)
-                    Circle.menu.data=data["obj"][i]
-
-                    Circle.hndl*=1/scl_layers  
-                    Circle.updateHandlesPos()
-
-                    ListItem = QStandardItem(QIcon('images/reactor.png'),data["obj"][i]["name"])
-                    ChekItem = QStandardItem("")
-                    check = (Qt.Checked if True else Qt.Unchecked)
-                    ChekItem.setCheckable(True)
-                    ChekItem.setCheckState(check)
-                    ChekItem.setEditable(False)
-                    # Переименовывание строки списка из меню обьекта
-                    
-                    LinkList = i
-                    LinkCheck = "check_"+i[5:]
-                    
-                    self.listObjectsDict[LinkList]=["name",ListItem,LinkCheck,Circle,True,False,None]
-                    self.listObjectsDict[LinkCheck]=["check",ChekItem,LinkList,None]
-
-                
-                elif data["obj"][i]["obj_type"]=="conductor":
-                    pen=QPen(QColor(data["obj"][i]['line_color']), 0, Qt.SolidLine)
-                    points = [[float(xy[0])*1000, -float(xy[1])*1000] for xy in data["obj"][i]["tbl_cord"]]
-                    Polyline = GraphicsPolylineItem(points,pen)
-                    Polyline.menu.data = data["obj"][i]
-
-                    Polyline.hndl*=1/scl_layers  
-                    Polyline.updateHandlesPos()
-
-                    ListItem = QStandardItem(QIcon('images/conductor.png'),data["obj"][i]["name"])
-                    check = (Qt.Checked if True else Qt.Unchecked)
-                    ChekItem = QStandardItem("")
-                    ChekItem.setCheckable(True)
-                    ChekItem.setCheckState(check)
-                    ChekItem.setEditable(False)
-                    # Переименовывание строки списка из меню обьекта
-
-                    LinkList = i
-                    LinkCheck = "check_"+i[5:]
-
-                    self.listObjectsDict[LinkList]=["name",ListItem,LinkCheck,Polyline,True,False,None]
-                    self.listObjectsDict[LinkCheck]=["check",ChekItem,LinkList,None]
-
-            self.view.scale(scl_layers,scl_layers)
-            self.view.current_scale = scl_layers
-            if xmax>-float("inf") and xmin<float("inf") and ymax>-float("inf") and ymin<float("inf"):
-                self.view.centerOn(0.5*(xmin+xmax)*1000,-0.5*(ymin+ymax)*1000)
-
-
-
-            self.CheckListlayers.isCheckFunc = True
-
-            for i in data["calc"]:
-                if i['obj_type'] == "H_calc_area":
-                    CalcArea = GraphicsRectItem((float(i["X1"])*1000,-float(i["Y1"])*1000,float(i["X2"])*1000,-float(i["Y2"])*1000))
-                    CalcArea.menu.data = i
-                    CalcItem = QStandardItem(QIcon('images/rectangle.png'),CalcArea.menu.data['name']) 
-                elif i['obj_type'] == "V_calc_area":
-                    CalcArea = GraphicsLineItem((float(i["X1"])*1000,-float(i["Y1"])*1000,float(i["X2"])*1000,-float(i["Y2"])*1000))
-                    CalcArea.menu.data = i
-                    CalcItem = QStandardItem(QIcon('images/line.jpg'),CalcArea.menu.data['name']) 
-                elif i['obj_type'] == "O_calc_point":
-                    CalcArea = OneCalcCircle((float(i["X"])*1000,-float(i["Y"])*1000),lambda:self.Run_calc_area())
-                    CalcArea.menu.data = i
-                    CalcItem = QStandardItem(QIcon('images/point.jpg'),CalcArea.menu.data['name']) 
-                    
-                CalcArea.hndl*=1/scl_layers 
-                CalcArea.updateHandlesPos()
-                
-                
-                check = (Qt.Checked if False else Qt.Unchecked)
-                ChekItem = QStandardItem("")
-                ChekItem.setCheckable(True)
-                ChekItem.setCheckState(check)
-                ChekItem.setEditable(False)
-
-                CalcArea.menu.setListName = (lambda CalcItem, CalcArea :(lambda :CalcItem.setText(CalcArea.menu.data["name"])))(CalcItem, CalcArea)
-                self.calcObjectsModel.appendRow([ChekItem,CalcItem])
-                
-                LinkList = QPersistentModelIndex(CalcItem.index())
-                LinkCheck = QPersistentModelIndex(ChekItem.index())
-                self.calcObjectsDict[LinkList]=["name",CalcItem,LinkCheck,CalcArea,False,False]
-                self.calcObjectsDict[LinkCheck]=["check",ChekItem,LinkList]
-
-            self.calc_id = len(data["calc"])
-
-        except Exception as ex:
-            print(ex)
-
-    def AddObj(self, obj_type):
-        
-        rect  = self.view.mapToScene(self.view.rect()).boundingRect()
-        wd, hg = rect.width()/4, rect.height()/4
-        cx,cy = rect.center().x(),rect.center().y()
-        
-        self.obj_id+=1
-        if obj_type == "conductor":
-            Obj = GraphicsPolylineItem([[cx-wd,cy-hg],[cx+wd,cy+hg]])
-
-            Obj.menu.data["name"] = "conductor_"+str(self.obj_id)
-            ListItem = QStandardItem(QIcon('images/conductor.png'),"conductor_"+str(self.obj_id))
-
-        elif obj_type == "reactor":
-            Obj = GraphicsCircleItem((cx,cy,wd))
-
-            Obj.menu.data["name"] = "reactor_"+str(self.obj_id)
-            ListItem = QStandardItem(QIcon('images/reactor.png'),"reactor_"+str(self.obj_id))
-
-        
-        Obj.hndl*=1/self.view.current_scale  
-        Obj.updateHandlesPos()
-
-        ChekItem = QStandardItem("")
-        check = (Qt.Checked if True else Qt.Unchecked)
-        ChekItem.setCheckable(True)
-        ChekItem.setCheckState(check)
-        ChekItem.setEditable(False)
-        # Переименовывание строки списка из меню обьекта
-        
-        LinkList = "name_"+str(self.obj_id)
-        LinkCheck = "check_"+str(self.obj_id)
-        
-        self.listObjectsDict[LinkList]=["name",ListItem,LinkCheck,Obj,True,False,None]
-        self.listObjectsDict[LinkCheck]=["check",ChekItem,LinkList,None]
-
-        self.LayersDict["Main"][1].add(LinkList)
-        self.CheckListlayers.ShowNewObj("Main")
-
-        
-    def AddCalcObj(self, obj_type):
-        rect  = self.view.mapToScene(self.view.rect()).boundingRect()
-        wd, hg = rect.width()/4, rect.height()/4
-        cx,cy = rect.center().x(),rect.center().y()
-        
-        self.calc_id+=1
-        if obj_type == "H_calc_area":
-            CalcArea = GraphicsRectItem((cx-wd,cy-hg,cx+wd,cy+hg))
-            
-            CalcArea.menu.data["name"] = "horizontal_"+str(self.calc_id)
-            CalcItem = QStandardItem(QIcon('images/rectangle.png'),"horizontal_"+str(self.calc_id))
-        elif obj_type == "V_calc_area":
-            CalcArea = GraphicsLineItem((cx-wd,cy-hg,cx+wd,cy+hg))
-
-            CalcArea.menu.data["name"] = "vertical_"+str(self.calc_id)
-            CalcItem = QStandardItem(QIcon('images/line.jpg'),"vertical_"+str(self.calc_id))
-        elif obj_type == "O_calc_point":
-            CalcArea = OneCalcCircle((cx,cy), lambda:self.Run_calc_area())
-
-            CalcArea.menu.data["name"] = "point_"+str(self.calc_id)
-            CalcItem = QStandardItem(QIcon('images/point.jpg'),"point_"+str(self.calc_id))
-            
-        CalcArea.hndl*=1/self.view.current_scale 
-        CalcArea.updateHandlesPos()
-        
-
-        check = (Qt.Checked if False else Qt.Unchecked)
-        ChekItem = QStandardItem("")
-        ChekItem.setCheckable(True)
-        ChekItem.setCheckState(check)
-        ChekItem.setEditable(False)
-
-        CalcArea.menu.setListName = (lambda CalcItem, CalcArea :(lambda :CalcItem.setText(CalcArea.menu.data["name"])))(CalcItem, CalcArea)
-        self.calcObjectsModel.appendRow([ChekItem,CalcItem])
-        
-        LinkList = QPersistentModelIndex(CalcItem.index())
-        LinkCheck = QPersistentModelIndex(ChekItem.index())
-        self.calcObjectsDict[LinkList]=["name",CalcItem,LinkCheck,CalcArea,False,False]
-        self.calcObjectsDict[LinkCheck]=["check",ChekItem,LinkList]
-
-
-
-    def load_dxf_file(self):
-        fname = QFileDialog.getOpenFileName(self, 'Открыть файл', self.path_home,'*.dxf')[0] # Обрати внимание на последний элемент
         name = os.path.splitext(os.path.split(fname)[1])[0]
 
-        self.CheckListlayers.isCheckFunc = False
+        self.ClearTrees()
 
-        #print(1/self.view.current_scale)
+        # Block signals for all metods
+        self.BlockSignals(True)
+
         self.view.scale(1/self.view.current_scale,1/self.view.current_scale)
 
+        wV = self.view.size().width()
+        hV = self.view.size().height()
 
-        for key in self.LayersDict:
-            self.OnOffLayers(key,False)
-            self.CheckListlayers.removeItem(key)
+        sourses, areas = data["Sourses"], data["Areas"]
+        xmin, ymin, xmax, ymax  = float("inf"), float("inf"), -float("inf"), -float("inf") 
+        fc = lambda a,b: (min(a[0],b[0]),min(a[1],b[1]),max(a[2],b[2]),max(a[3],b[3]))
 
-        self.listObjectsDict = {}
-        self.linksObjectsDict = {}
+        Sourses = []
+        Areas = []
 
-        self.DelCalcObj(al=True)
+        for name_lv, obj in sourses:
+            l = [name_lv, []]
+            for data in obj:
+                data_obj = MenuData(init_data=data)
+                if data_obj.type_object == "reactor":
+                    cord = ((data_obj.X.number_gui, -data_obj.Y.number_gui), data_obj.Rnar.number_gui)
+                    l[1].append([data_obj.name,data_obj.type_object,cord,data_obj])
+                    xmin, ymin, xmax, ymax = fc(data_obj.borders(),(xmin, ymin, xmax, ymax))
+
+                elif data_obj.type_object == "conductor":
+                    cord = [[x, -y] for x, y in data_obj.tbl_XY.number_gui]
+                    l[1].append([data_obj.name,data_obj.type_object,cord,data_obj])
+                    xmin, ymin, xmax, ymax = fc(data_obj.borders(),(xmin, ymin, xmax, ymax))
+
+            Sourses.append(l)
+
+        for name_lv, obj in areas:
+            l = [name_lv, []]
+            for data in obj:
+                data_obj = MenuData(init_data=data)
+                if data_obj.type_object == "horizontal_area":
+                    cord = (data_obj.X1.number_gui, -data_obj.Y2.number_gui, data_obj.X2.number_gui, -data_obj.Y1.number_gui)
+                    l[1].append([data_obj.name,data_obj.type_object,cord,data_obj])
+                    xmin, ymin, xmax, ymax = fc(data_obj.borders(),(xmin, ymin, xmax, ymax))
+
+                elif data_obj.type_object == "vertical_area":
+                    cord = (data_obj.X1.number_gui, -data_obj.Y1.number_gui, data_obj.X2.number_gui, -data_obj.Y2.number_gui)
+                    l[1].append([data_obj.name,data_obj.type_object,cord,data_obj])
+                    xmin, ymin, xmax, ymax = fc(data_obj.borders(),(xmin, ymin, xmax, ymax))
+
+                elif data_obj.type_object == "one_point":
+                    cord = (data_obj.X.number_gui, -data_obj.Y.number_gui)
+                    l[1].append([data_obj.name,data_obj.type_object,cord,data_obj])
+                    xmin, ymin, xmax, ymax = fc(data_obj.borders(),(xmin, ymin, xmax, ymax))
+
+            Areas.append(l)
 
 
-        self.LayersDict = {}
-        self.LayersDict["Main"] = [False,set()]
-        self.CheckListlayers.addItem("Main")
-        self.CheckListlayers.setItemState("Main",False)
+        scl_layers = min(wV/(xmax-xmin),hV/(ymax-ymin)) if xmax>-float("inf") and xmin<float("inf") and ymax>-float("inf") and ymin<float("inf") else 1
+        self.LoadData(Sourses, Areas, scl_layers)            
+           
+        self.view.current_scale = scl_layers
+        self.view.scale(scl_layers,scl_layers)
+        if xmax>-float("inf") and xmin<float("inf") and ymax>-float("inf") and ymin<float("inf"):
+            self.view.centerOn(0.5*(xmin+xmax),-0.5*(ymin+ymax))
 
+        # Unblock signals for all metods
+        self.BlockSignals(False)
 
-        self.obj_id = 0
-        self.calc_id = 0
+    def load_dxf_file(self):
+        # Create file dialog for open dxf file and get its name and path
+        fname = QFileDialog.getOpenFileName(self, 'Открыть файл', self.path_home,'*.dxf') # Обрати внимание на последний элемент
+        if fname[0] == "" and  fname[1] == "": return
+        fname = fname[0]
+        
+        name = os.path.splitext(os.path.split(fname)[1])[0]
+
+        self.ClearTrees()
+
+        # Block signals for all metods
+        self.BlockSignals(True)
+
+        self.view.scale(1/self.view.current_scale,1/self.view.current_scale)
 
         layers = dxf.OpenFile(fname)
 
         wV = self.view.size().width()
         hV = self.view.size().height()
 
-
-        xmax, ymax, xmin, ymin  = -float("inf"), -float("inf"), float("inf"), float("inf")
-
+        xmin, ymin, xmax, ymax  = float("inf"), float("inf"), -float("inf"), -float("inf") 
         fc = lambda a,b: (min(a[0],b[0]),min(a[1],b[1]),max(a[2],b[2]),max(a[3],b[3]))
+         
+        Sourses = []
+        Areas = []
+        for layer in layers:
+            
+            x1,y1,x2,y2 = layers[layer]["size"]
+            xmin, ymin, xmax, ymax = fc((x1,y1,x2,y2),(xmin, ymin, xmax, ymax))
 
-        for i in layers.values():
-            xmin, ymin, xmax, ymax = fc((i["size"][0],i["size"][1],i["size"][2],i["size"][3]),(xmin, ymin, xmax, ymax))
+            if layers[layer]["type"] == 'objects':
+                l = [layers[layer]["name"],[]]
+                for name_obj in layers[layer]["circle"]:
+                    l[1].append([name_obj,"reactor",layers[layer]["circle"][name_obj],None])
+                for name_obj in layers[layer]["lwpolyline"]:
+                    l[1].append([name_obj,"conductor",layers[layer]["lwpolyline"][name_obj],None])
+                Sourses.append(l)
 
-        #scl_layers = min([min(wV/(i["size"][2]-i["size"][0]),hV/(i["size"][3]-i["size"][1])) for i in layers.values()])
-        scl_layers = min(wV/(xmax-xmin),hV/(ymax-ymin)) if xmax>-float("inf") and xmin<float("inf") and ymax>-float("inf") and ymin<float("inf") else 1 
-        
-        dict_calc_obj ={}
-        for i in layers:
+            if layers[layer]["type"] == 'areas':
+                l = [layers[layer]["name"],[]]
+                for name_obj in layers[layer]["rectangle"]:
+                    l[1].append([name_obj,"horizontal_area",layers[layer]["rectangle"][name_obj],None])
+                for name_obj in layers[layer]["line"]:
+                    l[1].append([name_obj,"vertical_area",layers[layer]["line"][name_obj],None])
+                for name_obj in layers[layer]["point"]:
+                    l[1].append([name_obj,"one_point",layers[layer]["point"][name_obj],None])
+                Areas.append(l)
 
-            if layers[i]["type"] == 'objects':
-                self.CheckListlayers.addItem(i)
-                self.LayersDict[i] = [False,set()]
+        scl_layers = min(wV/(xmax-xmin),hV/(ymax-ymin)) if xmax>-float("inf") and xmin<float("inf") and ymax>-float("inf") and ymin<float("inf") else 1
+        self.LoadData(Sourses, Areas, scl_layers)            
 
-                for j in layers[i]["circle"]:
-                    self.obj_id+=1
-                    l=layers[i]["circle"][j]
-                    Circle = GraphicsCircleItem((l[0][0],-l[0][1],l[1]))
-
-                    Circle.hndl*=1/scl_layers  
-                    Circle.updateHandlesPos()
-                    Circle.menu.data["name"] = j
-
-                    ListItem = QStandardItem(QIcon('images/reactor.png'),j)
-                    ChekItem = QStandardItem("")
-                    check = (Qt.Checked if True else Qt.Unchecked)
-                    ChekItem.setCheckable(True)
-                    ChekItem.setCheckState(check)
-                    ChekItem.setEditable(False)
-                    # Переименовывание строки списка из меню обьекта
-                    
-
-                    LinkList = "name_"+str(self.obj_id)
-                    LinkCheck = "check_"+str(self.obj_id)
-                    
-                    self.listObjectsDict[LinkList]=["name",ListItem,LinkCheck,Circle,True,False,None]
-                    self.listObjectsDict[LinkCheck]=["check",ChekItem,LinkList,None]
-
-                    self.LayersDict[i][1].add(LinkList)
-
-
-                for j in layers[i]["lwpolyline"]:
-                    self.obj_id+=1
-                    l=layers[i]["lwpolyline"][j]
-                    points = [[xy[0], -xy[1]] for xy in l]
-                    Polyline = GraphicsPolylineItem(points)
-
-                    Polyline.hndl*=1/scl_layers  
-                    Polyline.updateHandlesPos()
-                    Polyline.menu.data["name"] = j
-
-                    ListItem = QStandardItem(QIcon('images/conductor.png'),j)
-                    check = (Qt.Checked if True else Qt.Unchecked)
-                    ChekItem = QStandardItem("")
-                    ChekItem.setCheckable(True)
-                    ChekItem.setCheckState(check)
-                    ChekItem.setEditable(False)
-                    # Переименовывание строки списка из меню обьекта
-
-                    LinkList = "name_"+str(self.obj_id)
-                    LinkCheck = "check_"+str(self.obj_id)
-
-                    self.listObjectsDict[LinkList]=["name",ListItem,LinkCheck,Polyline,True,False,None]
-                    self.listObjectsDict[LinkCheck]=["check",ChekItem,LinkList,None]
-
-                    self.LayersDict[i][1].add(LinkList)
-            dict_calc_obj.update([(k,["H_calc_area",v]) for k,v in layers[i]["rectangle"].items()] if layers[i]["type"]=='areas' else [])
-            dict_calc_obj.update([(k,["V_calc_area",v]) for k,v in layers[i]["line"].items()] if layers[i]["type"]=='areas' else [])
-            dict_calc_obj.update([(k,["O_calc_point",v]) for k,v in layers[i]["point"].items()] if layers[i]["type"]=='areas' else [])
-
+        self.view.current_scale = scl_layers  
         self.view.scale(scl_layers,scl_layers)
-        self.view.current_scale = scl_layers
         if xmax>-float("inf") and xmin<float("inf") and ymax>-float("inf") and ymin<float("inf"):
             self.view.centerOn(0.5*(xmin+xmax),-0.5*(ymin+ymax))
 
-        self.CheckListlayers.isCheckFunc = True
+        # Unblock signals for all metods
+        self.BlockSignals(False)
 
+    def LoadData(self, Sourses, Areas, scl_layers):
+        for name_lv, obj in Sourses:
+            parent = TreeWidgetItem(self.SoursesObjectsTree, ["",name_lv])
+            parent.setFlags(parent.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEditable)
+            parent.setCheckState(0, Qt.Unchecked)
+            parent.setIcon(1,QIcon("images/sourse.png"))
+
+            self.SoursesObjectsDict[parent] = Atributs()
+            self.SoursesObjectsChildren[parent] = set()
+
+            for name_obj, tp, cord, data in obj:
+                if tp == "reactor":
+                    child = TreeWidgetItem(["",name_obj])
+                    child.setFlags(child.flags() | Qt.ItemIsUserCheckable)
+                    child.setCheckState(0, Qt.Unchecked)
+                    child.setIcon(1,QIcon("images/reactor.png"))
+                    parent.addChild(child)
+
+                    Circle = GraphicsCircleItem((cord[0][0],-cord[0][1],cord[1]),data=data,calc_func=self.PointCalc)
+                    Circle.hndl*=1/scl_layers  
+                    Circle.updateHandlesPos()
+                    Circle.menu.data.name = name_obj
+                    Circle.menu.setListName = self.Callbackname(child,Circle)
+
+                    self.SoursesObjectsDict[child] = Atributs(type_link="object",type_object=tp ,graphic_item=Circle)  
+                    self.SoursesObjectsChildren[parent].add(child)
+                
+                elif tp == "conductor":
+                    child = TreeWidgetItem(["",name_obj])
+                    child.setFlags(child.flags() | Qt.ItemIsUserCheckable)
+                    child.setCheckState(0, Qt.Unchecked)
+                    child.setIcon(1,QIcon("images/conductor.png"))
+                    parent.addChild(child)
+
+                    Polyline = GraphicsPolylineItem([[xy[0], -xy[1]] for xy in cord],data=data,calc_func=self.PointCalc)
+                    Polyline.hndl*=1/scl_layers  
+                    Polyline.updateHandlesPos()
+                    Polyline.menu.data.name = name_obj
+                    Polyline.menu.setListName = self.Callbackname(child,Polyline)
+
+                    self.SoursesObjectsDict[child] = Atributs(type_link="object",type_object=tp ,graphic_item=Polyline)  
+                    self.SoursesObjectsChildren[parent].add(child)
         
-        for j,i in dict_calc_obj.items():
-            if i[0] == "H_calc_area":
-                CalcArea = GraphicsRectItem((i[1][0],-i[1][3],i[1][2],-i[1][1])) 
-                CalcItem = QStandardItem(QIcon('images/rectangle.png'),j) 
-            elif i[0] == "V_calc_area":
-                CalcArea = GraphicsLineItem((i[1][0],-i[1][1],i[1][2],-i[1][3]))
-                CalcItem = QStandardItem(QIcon('images/line.jpg'),j) 
-            elif i[0] == "O_calc_point":
-                CalcArea = OneCalcCircle((i[1][0],-i[1][1]), lambda:self.Run_calc_area())
-                CalcItem = QStandardItem(QIcon('images/point.jpg'),j) 
-
-            CalcArea.menu.data['name'] = j   
-            CalcArea.hndl*=1/scl_layers 
-            CalcArea.updateHandlesPos()
-            
-            
-            check = (Qt.Checked if False else Qt.Unchecked)
-            ChekItem = QStandardItem("")
-            ChekItem.setCheckable(True)
-            ChekItem.setCheckState(check)
-            ChekItem.setEditable(False)
-
-            CalcArea.menu.setListName = (lambda CalcItem, CalcArea :(lambda :CalcItem.setText(CalcArea.menu.data["name"])))(CalcItem, CalcArea)
-            self.calcObjectsModel.appendRow([ChekItem,CalcItem])
-            
-            LinkList = QPersistentModelIndex(CalcItem.index())
-            LinkCheck = QPersistentModelIndex(ChekItem.index())
-            self.calcObjectsDict[LinkList]=["name",CalcItem,LinkCheck,CalcArea,False,False]
-            self.calcObjectsDict[LinkCheck]=["check",ChekItem,LinkList]
-
-        self.calc_id = len(dict_calc_obj)
         
+        for name_lv, obj in Areas:
+            parent = TreeWidgetItem(self.AreasObjectsTree, ["",name_lv])
+            parent.setFlags(parent.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEditable)
+            parent.setCheckState(0, Qt.Unchecked)
+            parent.setIcon(1,QIcon("images/area.png"))
 
-        
+            self.AreasObjectsDict[parent] = Atributs()
+            self.AreasObjectsChildren[parent] = set()
+
+            for name_obj, tp, cord, data in obj:
+                if tp == "horizontal_area":
+                    child = TreeWidgetItem(["",name_obj])
+                    child.setFlags(child.flags() | Qt.ItemIsUserCheckable)
+                    child.setCheckState(0, Qt.Unchecked)
+                    child.setIcon(1,QIcon("images/rectangle.png"))
+                    parent.addChild(child)
+
+                    CalcArea = GraphicsRectItem((cord[0],-cord[3],cord[2],-cord[1]),data=data)
+                    CalcArea.menu.data.name = name_obj
+                    CalcArea.hndl*=1/scl_layers 
+                    CalcArea.updateHandlesPos()
+                    CalcArea.menu.setListName = self.Callbackname(child,CalcArea)
+
+                    self.AreasObjectsDict[child] = Atributs(type_link="object",type_object=tp,graphic_item=CalcArea)    
+                    self.AreasObjectsChildren[parent].add(child)
+
+                elif tp == "vertical_area":
+                    child = TreeWidgetItem(["",name_obj])
+                    child.setFlags(child.flags() | Qt.ItemIsUserCheckable)
+                    child.setCheckState(0, Qt.Unchecked)
+                    child.setIcon(1,QIcon("images/line.png"))
+                    parent.addChild(child)
+
+                    CalcArea = GraphicsLineItem((cord[0],-cord[1],cord[2],-cord[3]),data=data)
+                    CalcArea.menu.data.name = name_obj   
+                    CalcArea.hndl*=1/scl_layers 
+                    CalcArea.updateHandlesPos() 
+                    CalcArea.menu.setListName = self.Callbackname(child,CalcArea)
+
+                    self.AreasObjectsDict[child] = Atributs(type_link="object",type_object="vertical_area",graphic_item=CalcArea)
+                    self.AreasObjectsChildren[parent].add(child)
+
+                elif tp == "one_point":
+                    child = TreeWidgetItem(["",name_obj])
+                    child.setFlags(child.flags() | Qt.ItemIsUserCheckable)
+                    child.setCheckState(0, Qt.Unchecked)
+                    child.setIcon(1,QIcon("images/point.png"))
+                    parent.addChild(child)
+                    
+                    CalcArea = OneCalcCircle((cord[0],-cord[1]),data=data,calc_func=self.PointCalc)
+                    CalcArea.menu.data.name = name_obj
+                    CalcArea.hndl*=1/scl_layers
+                    CalcArea.updateHandlesPos()
+                    CalcArea.menu.setListName = self.Callbackname(child,CalcArea)
+
+                    self.AreasObjectsDict[child] = Atributs(type_link="object",type_object="one_point",graphic_item=CalcArea)
+                    self.AreasObjectsChildren[parent].add(child)
+
+
+    def SaveCalcData(self):
+        try:
+            fname = QFileDialog.getSaveFileName(self, 'Сохранить файл', self.path_home,'*.mfc')
+            if fname[0] == "" and fname[1] == "": return
+            fname = fname[0]
+
+            Sourses = []
+            Areas = []
+
+            for key,item in self.SoursesObjectsChildren.items():
+                Sourses.append([key.text(1),[self.SoursesObjectsDict[i].graphic_item.menu.data.save() for i in item]]) 
+
+            for key,item in self.AreasObjectsChildren.items():
+                Areas.append([key.text(1),[self.AreasObjectsDict[i].graphic_item.menu.data.save() for i in item]]) 
+  
+            with open( fname, "w", encoding="utf8") as f:
+                json.dump({"Sourses":Sourses, "Areas":Areas},f, indent=4)
+        except Exception as ex:
+            print(ex)
+        else:
+            print("good save")
+           
         
 if __name__ == '__main__':
     app = QApplication(sys.argv)

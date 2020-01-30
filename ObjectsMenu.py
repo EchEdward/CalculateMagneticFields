@@ -8,7 +8,8 @@ from PyQt5.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QLabel,QPushButton,\
 from PyQt5.QtGui import  QValidator, QColor, QIcon, QStandardItem, QStandardItemModel
 from PyQt5.QtCore import Qt
 
-import main_calculate
+from main_calculate import SolenParam
+import numpy as np
 
 
 class MyValidator(QValidator):
@@ -160,9 +161,6 @@ class Save_Widget(QWidget):
         
         self.items = []
 
-        
-
-
         for i in sp:
             if i[2] == "H_calc_area":
                 it = QStandardItem(QIcon('images/rectangle.png'),i[1])
@@ -191,13 +189,411 @@ class Save_Widget(QWidget):
         
         self.func(sp,t)
 
+class IntDataPoint:
+    def __init__(self, who, atrr=""):
+        self._atrr = atrr
+        self._who = who
 
-                
+    @property
+    def number(self):
+        if len(self._atrr) == 0:
+            raise Exception(f"Значение '{self._who}' не введено")
+        return int(self._atrr)
+    
+    def setNumber(self,f):
+        try:
+            if f % 1 != 0: raise Exception
+            int(f)
+        except Exception:
+            raise Exception(f"Значение '{self._who}' не коректно")
+        else:
+            self._atrr = str(f)
+
+    @property
+    def text(self):
+        return self._atrr
+
+    def setText(self,text):
+        self._atrr = text
+
+class FloatDataPoint:
+    def __init__(self, who, koef=1, atrr=""):
+        self._atrr = atrr
+        self._who = who
+        self._koef = koef
+
+    @property
+    def number_gui(self):
+        return self.number*self._koef
+
+    @property
+    def number(self):
+        if len(self._atrr) == 0:
+            raise Exception(f"Значение '{self._who}' не введено")
+        return float(self._atrr)
+    
+    def setNumber_gui(self,f):
+        self._atrr = str(round(self._setNumber(f)/self._koef,3))
+
+    def setNumber(self,f):
+        self._atrr = str(round(self._setNumber(f),3))
+
+    def _setNumber(self,f):
+        try:
+            float(f)
+        except Exception:
+            raise Exception(f"Значение '{self._who}' не коректно")
+        else:
+            return f
+
+    @property
+    def text(self):
+        return self._atrr
+
+    def setText(self,text):
+        self._atrr = text
+
+class TableDataPoint:
+    def __init__(self, who, cols=1, koef=(1,), atrr=[]):
+        self._atrr = atrr
+        self._who = who
+        self._koef = koef
+        self._cols = cols
+
+    @property
+    def number(self):
+        arr = []
+        try:
+            for r in self._atrr:
+                if self._cols == 1:
+                    row = arr
+                else: 
+                    row = []
+                for i in range(self._cols):
+                    row.append(float(r) if self._cols == 1 else float(r[i]))
+
+                if self._cols != 1:
+                    arr.append(row)
+        except Exception:
+            raise Exception(f"Значение '{self._who}' не введено")
+        else:
+            return arr
+
+    @property
+    def number_gui(self):
+        arr = []
+        for i in self.number:
+            a = []
+            for j in range(self._cols):
+                a.append(i[j]*self._koef[j])
+            arr.append(a)
+        return arr
+
+    def _setNumber(self,arr,trig):
+        try:
+            if trig:
+                koef = self._koef
+            else:
+                koef = [1]*self._cols
+            _atrr = []
+            for r in arr:
+                if self._cols == 1:
+                    row = _atrr
+                else: 
+                    row = []
+                for i in range(self._cols):
+                    a = float(r) if self._cols == 1 else float(r[i])
+                    row.append(str(r) if self._cols == 1 else str(round(r[i]/koef[i],3)))
+
+                if self._cols != 1:
+                    _atrr.append(row)
+        except Exception:
+            raise Exception(f"Значение '{self._who}' не коректно")
+        else:
+            self._atrr = _atrr
+
+    def setNumber(self,arr):
+        self._setNumber(arr,False)
+    def setNumber_gui(self,arr):
+        self._setNumber(arr,True)
+
+    @property
+    def text(self):
+        return self._atrr
+
+    def setText(self,arr):      
+        self._atrr = arr
+       
+
+class MenuData:
+    def __init__(self,type_object=None,init_data={}):
+        #print(init_data)
+
+        self._parent = None
+
+        if type_object is None and len(init_data)>0:
+            self.type_object = init_data['type_object']
+            self.name = init_data['name']
+        elif type_object is not None and len(init_data)==0:
+            self.type_object = type_object
+            self.name = ""
+        else:
+            raise Exception("Create MenuData is failed")
+
+        if self.type_object == "one_point":
+            self.one_point(init_data)
+        elif self.type_object == "vertical_area":
+            self.vertical_area(init_data)
+        elif self.type_object == "horizontal_area":
+            self.horizontal_area(init_data)
+        elif self.type_object == "conductor":
+            self.conductor(init_data)
+        elif self.type_object == "reactor":
+            self.reactor(init_data)
+
+    
+    def setParent(self,parent):
+        self._parent = parent
+        
+
+    def one_point(self,d):
+        self.line_color = d.get("line_color",'#000000')
+        self.X = FloatDataPoint(f"Точка {self.name}, X",koef=1000, atrr=d.get("X",""))
+        self.Y = FloatDataPoint(f"Точка {self.name}, Y",koef=-1000, atrr=d.get("Y",""))
+        self.Z = FloatDataPoint(f"Точка {self.name}, Z", atrr=d.get("Z","1.8"))
+        self.dl = FloatDataPoint(f"Точка {self.name}, dl", atrr=d.get("dl","0.01"))
+        self.da = FloatDataPoint(f"Точка {self.name}, da", atrr=d.get("da","1"))
+        self.result = FloatDataPoint(f"Точка {self.name}, результат", atrr=d.get("result","0.00"))
+
+
+    def vertical_area(self,d):
+        self.line_color = d.get("line_color",'#000000')
+        self.X1 = FloatDataPoint(f"Вертикальное сечение {self.name}, X1",koef=1000, atrr=d.get("X1",""))
+        self.X2 = FloatDataPoint(f"Вертикальное сечение {self.name}, X2",koef=1000, atrr=d.get("X2",""))
+        self.Y1 = FloatDataPoint(f"Вертикальное сечение {self.name}, Y1",koef=-1000, atrr=d.get("Y1",""))
+        self.Y2 = FloatDataPoint(f"Вертикальное сечение {self.name}, Y2",koef=-1000, atrr=d.get("Y2",""))
+        self.Z1 = FloatDataPoint(f"Вертикальное сечение {self.name}, Z1", atrr=d.get("Z1","0"))
+        self.Z2 = FloatDataPoint(f"Вертикальное сечение {self.name}, Z2", atrr=d.get("Z2","2"))
+        self.dg = FloatDataPoint(f"Вертикальное сечение {self.name}, dg", atrr=d.get("dg","0.5"))
+        self.dl = FloatDataPoint(f"Вертикальное сечение {self.name}, dl", atrr=d.get("dl","0.01"))
+        self.da = FloatDataPoint(f"Вертикальное сечение {self.name}, da", atrr=d.get("da","1"))
+
+    def horizontal_area(self,d):
+        self.line_color = d.get("line_color",'#000000')
+        self.X1 = FloatDataPoint(f"Горизонтальное сечение {self.name}, X1",koef=1000, atrr=d.get("X1",""))
+        self.X2 = FloatDataPoint(f"Горизонтальное сечение {self.name}, X2",koef=1000, atrr=d.get("X2",""))
+        self.Y1 = FloatDataPoint(f"Горизонтальное сечение {self.name}, Y1",koef=-1000, atrr=d.get("Y1",""))
+        self.Y2 = FloatDataPoint(f"Горизонтальное сечение {self.name}, Y2",koef=-1000, atrr=d.get("Y2",""))
+        self.Z = FloatDataPoint(f"Горизонтальное сечение {self.name}, Z", atrr=d.get("Z","1.8"))
+        self.dg = FloatDataPoint(f"Горизонтальное сечение {self.name}, dg", atrr=d.get("dg","0.5"))
+        self.dl = FloatDataPoint(f"Горизонтальное сечение {self.name}, dl", atrr=d.get("dl","0.01"))
+        self.da = FloatDataPoint(f"Горизонтальное сечение {self.name}, da", atrr=d.get("da","1"))
+
+    def conductor(self,d):
+        self.line_color = d.get("line_color",'#000000')
+        self.I = FloatDataPoint(f"Шина {self.name}, I", atrr=d.get("I",""))
+        self.deg = FloatDataPoint(f"Шина {self.name}, deg", atrr=d.get("deg",""))
+
+        self.tbl_XY = TableDataPoint(f"Шина {self.name}, XY", cols=2, koef=(1000,-1000), atrr=d.get("tbl_XY",[]))
+        self.tbl_Z = TableDataPoint(f"Шина {self.name}, Z", atrr=d.get("tbl_Z",[]))
+        self.tbl_fmax = TableDataPoint(f"Шина {self.name}, fmax", atrr=d.get("tbl_fmax",[]))
+
+        self.lbl_fmax = FloatDataPoint(f"Шина {self.name}, common_fmax", atrr=d.get("lbl_fmax",""))
+        self.chck_fmax = d.get("chck_fmax", False)
+
+    def reactor(self,d): 
+        self.body_color = d.get("body_color",'#ff0000')
+        self.line_color = d.get("line_color",'#000000')
+        self.I = FloatDataPoint(f"Реактор {self.name}, I", atrr=d.get("I",""))
+        self.deg = FloatDataPoint(f"Реактор {self.name}, deg", atrr=d.get("deg",""))
+        self.X = FloatDataPoint(f"Реактор {self.name}, X",koef=1000, atrr=d.get("X",""))
+        self.Y = FloatDataPoint(f"Реактор {self.name}, Y",koef=-1000, atrr=d.get("Y",""))
+        self.Z = FloatDataPoint(f"Реактор {self.name}, Z", atrr=d.get("Z",""))
+        self.Rnar = FloatDataPoint(f"Реактор {self.name}, Rнар",koef=1000, atrr=d.get("Rnar",""))
+        self.Rvn = FloatDataPoint(f"Реактор {self.name}, Rвн", atrr=d.get("Rvn",""))
+        self.H = FloatDataPoint(f"Реактор {self.name}, h", atrr=d.get("H",""))
+        self.W = IntDataPoint(f"Реактор {self.name}, витки", atrr=d.get("W",""))
+        self.m = IntDataPoint(f"Реактор {self.name}, слои", atrr=d.get("m",""))
+        self.dP = FloatDataPoint(f"Реактор {self.name}, dP", atrr=d.get("dP",""))
+        self.Q = FloatDataPoint(f"Реактор {self.name}, Q", atrr=d.get("Q",""))
+        self.Unom = FloatDataPoint(f"Реактор {self.name}, Unom", atrr=d.get("Unom",""))
+        self.met = d.get("met","")
+        self.Xl = FloatDataPoint(f"Реактор {self.name}, Xl", atrr=d.get("Xl",""))
+        self.Inom = FloatDataPoint(f"Реактор {self.name}, Iном", atrr=d.get("Inom",""))
+
+    def save(self):
+        d = {}
+        d["name"] = self.name
+        d["type_object"] = self.type_object
+
+        if self._parent is not None: self._parent.InitCords()
+
+        if self.type_object == "reactor":
+            d["body_color"] =self.body_color
+            d["line_color"] = self.line_color
+            d["I"] = self.I.text
+            d["deg"] = self.deg.text
+            d["X"] = self.X.text
+            d["Y"] = self.Y.text
+            d["Z"] = self.Z.text
+            d["Rnar"] = self.Rnar.text
+            d["Rvn"] = self.Rvn.text
+            d["H"] = self.H.text
+            d["W"] = self.W.text
+            d["m"] = self.m.text
+            d["dP"] = self.dP.text
+            d["Q"] = self.Q.text
+            d["Unom"] = self.Unom.text
+            d["met"] = self.met
+            d["Xl"] = self.Xl.text
+            d["Inom"] = self.Inom.text
+            return d
+        
+        elif self.type_object == "conductor":
+            d["line_color"] = self.line_color
+            d["I"] = self.I.text
+            d["deg"] = self.deg.text
+            d["lbl_fmax"] = self.lbl_fmax.text
+            d["chck_fmax"] = self.chck_fmax
+
+            d["tbl_XY"] = self.tbl_XY.text
+            d["tbl_Z"] = self.tbl_Z.text
+            d["tbl_fmax"] = self.tbl_fmax.text
+            return d
+
+        elif self.type_object == "horizontal_area":
+            #print(self.X1.text,self.Y1.text,self.X2.text,self.Y2.text)
+            d["line_color"] = self.line_color
+            d["X1"] = self.X1.text
+            d["Y1"] = self.Y1.text
+            d["X2"] = self.X2.text
+            d["Y2"] = self.Y2.text
+            d["Z"] = self.Z.text
+            d["dg"] = self.dg.text
+            d["da"] = self.da.text
+            d["dl"] = self.dl.text
+            return d
+
+        elif self.type_object == "vertical_area":
+            d["line_color"] = self.line_color
+            d["X1"] = self.X1.text
+            d["Y1"] = self.Y1.text
+            d["X2"] = self.X2.text
+            d["Y2"] = self.Y2.text
+            d["Z1"] = self.Z1.text
+            d["Z2"] = self.Z2.text
+            d["dg"] = self.dg.text
+            d["da"] = self.da.text
+            d["dl"] = self.dl.text
+            return d
+
+        elif self.type_object == "one_point":
+            d["line_color"] = self.line_color
+            d["X"] = self.X.text
+            d["Y"] = self.Y.text
+            d["Z"] = self.Z.text
+            d["da"] = self.da.text
+            d["dl"] = self.dl.text
+            d["result"] = self.result.text
+            return d
+
+
+    @staticmethod
+    def _border(a,b):
+        return (min(a[0],b[0]),min(a[1],b[1]),max(a[2],b[0]),max(a[3],b[1]))
+
+    def borders(self):
+        xmin, ymin, xmax, ymax  = float("inf"), float("inf"), -float("inf"), -float("inf") 
+
+        if self.type_object == "one_point":
+            xmin, ymin, xmax, ymax = self._border((xmin, ymin, xmax, ymax),(self.X.number_gui+25, -self.Y.number_gui+25))
+            xmin, ymin, xmax, ymax = self._border((xmin, ymin, xmax, ymax),(self.X.number_gui-25, -self.Y.number_gui-25))
+        elif self.type_object == "vertical_area":
+            xmin, ymin, xmax, ymax = self._border((xmin, ymin, xmax, ymax),(self.X1.number_gui, -self.Y1.number_gui))
+            xmin, ymin, xmax, ymax = self._border((xmin, ymin, xmax, ymax),(self.X2.number_gui, -self.Y2.number_gui))
+        elif self.type_object == "horizontal_area":
+            xmin, ymin, xmax, ymax = self._border((xmin, ymin, xmax, ymax),(self.X1.number_gui, -self.Y1.number_gui))
+            xmin, ymin, xmax, ymax = self._border((xmin, ymin, xmax, ymax),(self.X2.number_gui, -self.Y2.number_gui))
+        elif self.type_object == "conductor":
+            for x,y in self.tbl_XY.number_gui:
+                xmin, ymin, xmax, ymax = self._border((xmin, ymin, xmax, ymax),(x, -y))
+        elif self.type_object == "reactor":
+            r = self.Rnar.number_gui
+            xmin, ymin, xmax, ymax = self._border((xmin, ymin, xmax, ymax),(self.X.number_gui+r, -self.Y.number_gui+r))
+            xmin, ymin, xmax, ymax = self._border((xmin, ymin, xmax, ymax),(self.X.number_gui-r, -self.Y.number_gui-r))
+
+        return (xmin, ymin, xmax, ymax)
+
+    def read_data(self):
+        if self._parent is not None: self._parent.InitCords()
+
+        if self.type_object == "reactor":
+            x, y, z = self.X.number, self.Y.number, self.Z.number
+            Rnar = self.Rnar.number
+            h = self.H.number
+            n = self.W.number
+            m = self.m.number
+            fase = self.deg.number
+            alf=np.cos(fase*np.pi/180)+1j*np.sin(fase*np.pi/180)
+            I = self.I.number
+
+            if m > 1 and self.Rvn.number >= Rnar:
+                raise Exception(f"Внутренний радиус реактора {self.name} больше внешнего")
+            elif m > 1:
+                Rvn = self.Rvn.number          
+                    
+            if m > 1:
+                a = (x,y,z,Rnar,h,n,m,(Rnar-Rvn)/(m-1))
+            else:
+                a = (x,y,z,Rnar,h,n)
+
+            return (self.type_object,a, m, alf, I)
+
+        elif self.type_object == "conductor":
+            I = self.I.number
+            fase = self.deg.number
+            alf=np.cos(fase*np.pi/180)+1j*np.sin(fase*np.pi/180)
+            cord = tuple([(i,j,k) for (i,j),k in zip(self.tbl_XY.number,self.tbl_Z.number)])
+            if self.chck_fmax:
+                fmax = tuple(self.tbl_fmax.number)
+                a = (cord,fmax)
+            else:
+                a = (cord,)
+
+            return (self.type_object,a, alf, I)
+
+        elif self.type_object == "horizontal_area":
+            area_calc = (self.X1.number,self.Y2.number,self.X2.number,self.Y1.number)
+            dg = self.dg.number
+            dl = self.dl.number
+            da = self.da.number
+            z = (self.Z.number,)
+
+            return (self.type_object, area_calc, z, da, dl, dg)
+
+        elif self.type_object == "vertical_area":
+            area_calc = (self.X1.number,self.Y2.number,self.X2.number,self.Y1.number)
+            dg = self.dg.number
+            dl = self.dl.number
+            da = self.da.number
+            z = (self.Z1.number,self.Z2.number)
+
+            return (self.type_object, area_calc, z, da, dl, dg)
+
+        elif self.type_object == "one_point":
+            area_calc = [self.X.number,self.Y.number]
+            dg = 0.5
+            dl = self.dl.number
+            da = self.da.number
+            z = (self.Z.number,)
+
+            return (self.type_object, area_calc, z, da, dl, dg)
+
 
 
 
 class OnePoint(QWidget):
-    def __init__(self,setCrl,getPos,setPos,parent=None):#
+    def __init__(self,setCrl,getPos,setPos,parent=None,data=None):#
         super(OnePoint,self).__init__(parent)
         self.setCrl = setCrl
         self.getPos = getPos
@@ -211,15 +607,8 @@ class OnePoint(QWidget):
         HspacerItem = [QSpacerItem(2, 2, QSizePolicy.Expanding, QSizePolicy.Minimum) for i in range(2)]
         VspacerItem = [QSpacerItem(2, 2, QSizePolicy.Minimum, QSizePolicy.Expanding) for i in range(2)]
 
-        self.data = {'name':'',
-            "obj_type":"O_calc_point",
-            'line_color':'',
-            'X':'',
-            'Y':'',
-            'Z':'1.8',
-            'dl':'0.01',
-            'da':'1',
-            'result':'-00.00'}
+        self.data = MenuData("one_point") if data is None else data
+        self.data.setParent(self)
 
         self.name = QLineEdit()
         BoxLayoutB1 = QVBoxLayout()
@@ -284,11 +673,13 @@ class OnePoint(QWidget):
 
         self.setLayout(BoxLayoutB7)
 
+        self.InitCords()
+
     
     def InitCords(self):
         cord = self.getPos()
-        self.data['X'] = str(round(cord[0]/1000,3))
-        self.data['Y'] = str(round(-cord[1]/1000,3))
+        self.data.X.setNumber_gui(cord[0])
+        self.data.Y.setNumber_gui(cord[1])
 
 
 
@@ -299,35 +690,34 @@ class OnePoint(QWidget):
         self.line.setStyleSheet( " background-color: %s; " % self.line_color )
 
     def save_data(self):
-        self.data['line_color'] = self.line_color
-        self.data["name"] = self.name.text()
-        self.data['Z'] = self.Z.text()
+        self.data.line_color = self.line_color
+        self.data.name = self.name.text()
+        self.data.Z.setText(self.Z.text())
 
-        self.data['X'] = self.X.text()
-        self.data['Y'] = self.Y.text()
+        self.data.X.setText(self.X.text())
+        self.data.Y.setText(self.Y.text())
 
-        self.data['dl'] = self.dl.text()
-        self.data['da'] = self.da.text()
+        self.data.dl.setText(self.dl.text())
+        self.data.da.setText(self.da.text())
 
         self.close()
-        self.setPos((float(self.data['X'])*1000,-float(self.data['Y'])*1000))
+        self.setPos((self.data.X.number_gui,self.data.Y.number_gui))
         self.setCrl()
         self.setListName()
 
     def show(self, *args, **kwargs):
         try:
-            self.name.setText(self.data["name"])
-            self.line_color = self.data['line_color'] if self.data['line_color'] != '' else QColor("black").name()
+            self.name.setText(self.data.name)
+            self.line_color = self.data.line_color if self.data.line_color != '' else QColor("black").name()
             self.line.setStyleSheet( " background-color: %s; " % self.line_color )
-            self.Z.setText(self.data['Z'])
-            self.dl.setText(self.data['dl'])
-            self.da.setText(self.data['da'])
+            self.Z.setText(self.data.Z.text)
+            self.dl.setText(self.data.dl.text)
+            self.da.setText(self.data.da.text)
 
-            cord = self.getPos()
-            self.X.setText(str(round(cord[0]/1000,3)))
-            self.Y.setText(str(round(-cord[1]/1000,3)))
+            self.InitCords()
 
-            
+            self.X.setText(self.data.X.text)
+            self.Y.setText(self.data.Y.text)
 
         except Exception as ex:
             print(ex)
@@ -335,7 +725,7 @@ class OnePoint(QWidget):
         QWidget.show(self, *args, **kwargs)
 
 class CalcAreaV(QWidget):
-    def __init__(self,setCrl,getPos,setPos,parent=None):
+    def __init__(self,setCrl,getPos,setPos,parent=None,data=None):
         super(CalcAreaV,self).__init__(parent)
         self.setCrl = setCrl
         self.getPos = getPos
@@ -349,18 +739,8 @@ class CalcAreaV(QWidget):
         HspacerItem = [QSpacerItem(2, 2, QSizePolicy.Expanding, QSizePolicy.Minimum) for i in range(2)]
         VspacerItem = [QSpacerItem(2, 2, QSizePolicy.Minimum, QSizePolicy.Expanding) for i in range(2)]
 
-        self.data = {'name':'',
-            "obj_type":"V_calc_area",
-            'line_color':'',
-            'Z1':'0',
-            'Z2':'2',
-            'X1':'',
-            'Y1':'',
-            'X2':'',
-            'Y2':'',
-            'dg':'0.5',
-            'dl':'0.01',
-            'da':'1'}
+        self.data = MenuData("vertical_area") if data is None else data
+        self.data.setParent(self)
 
         self.name = QLineEdit()
         BoxLayoutB1 = QVBoxLayout()
@@ -448,10 +828,11 @@ class CalcAreaV(QWidget):
 
     def InitCords(self):
         cord = self.getPos()
-        self.data['X1'] = str(round(cord[0]/1000,3))
-        self.data['Y1'] = str(round(-cord[1]/1000,3))
-        self.data['X2'] = str(round(cord[2]/1000,3))
-        self.data['Y2'] = str(round(-cord[3]/1000,3))
+        self.data.X1.setNumber_gui(cord[0])
+        self.data.Y1.setNumber_gui(cord[1])
+        self.data.X2.setNumber_gui(cord[2])
+        self.data.Y2.setNumber_gui(cord[3])
+
 
     def getColor(self):
         color = QColorDialog.getColor(initial=QColor(self.line_color),parent=self,\
@@ -460,39 +841,40 @@ class CalcAreaV(QWidget):
         self.line.setStyleSheet( " background-color: %s; " % self.line_color )
 
     def save_data(self):
-        self.data['line_color'] = self.line_color
-        self.data["name"] = self.name.text()
-        self.data['Z1'] = self.Z1.text()
-        self.data['Z2'] = self.Z2.text()
-        self.data['X1'] = self.X1.text()
-        self.data['Y1'] = self.Y1.text()
-        self.data['X2'] = self.X2.text()
-        self.data['Y2'] = self.Y2.text()
-        self.data['dg'] = self.dg.text()
-        self.data['dl'] = self.dl.text()
-        self.data['da'] = self.da.text()
+        self.data.line_color = self.line_color
+        self.data.name = self.name.text()
+        self.data.Z1.setText(self.Z1.text())
+        self.data.Z2.setText(self.Z2.text())
+        self.data.X1.setText(self.X1.text())
+        self.data.Y1.setText(self.Y1.text())
+        self.data.X2.setText(self.X2.text())
+        self.data.Y2.setText(self.Y2.text())
+        self.data.dg.setText(self.dg.text())
+        self.data.dl.setText(self.dl.text())
+        self.data.da.setText(self.da.text())
 
         self.close()
-        self.setPos((float(self.data['X1'])*1000,-float(self.data['Y1'])*1000,float(self.data['X2'])*1000,-float(self.data['Y2'])*1000))
+        self.setPos((self.data.X1.number_gui,self.data.Y1.number_gui,self.data.X2.number_gui,self.data.Y2.number_gui))
         self.setCrl()
         self.setListName()
 
     def show(self, *args, **kwargs):
         try:
-            self.name.setText(self.data["name"])
-            self.line_color = self.data['line_color'] if self.data['line_color'] != '' else QColor("black").name()
+            self.name.setText(self.data.name)
+            self.line_color = self.data.line_color if self.data.line_color != '' else QColor("black").name()
             self.line.setStyleSheet( " background-color: %s; " % self.line_color )
-            self.Z1.setText(self.data['Z1'])
-            self.Z2.setText(self.data['Z2'])
-            self.dg.setText(self.data['dg'])
-            self.dl.setText(self.data['dl'])
-            self.da.setText(self.data['da'])
+            self.Z1.setText(self.data.Z1.text)
+            self.Z2.setText(self.data.Z2.text)
+            self.dg.setText(self.data.dg.text)
+            self.dl.setText(self.data.dl.text)
+            self.da.setText(self.data.da.text)
 
-            cord = self.getPos()
-            self.X1.setText(str(round(cord[0]/1000,3)))
-            self.Y1.setText(str(round(-cord[1]/1000,3)))
-            self.X2.setText(str(round(cord[2]/1000,3)))
-            self.Y2.setText(str(round(-cord[3]/1000,3)))
+            self.InitCords()
+
+            self.X1.setText(self.data.X1.text)
+            self.Y1.setText(self.data.Y1.text)
+            self.X2.setText(self.data.X2.text)
+            self.Y2.setText(self.data.Y2.text)
             
 
         except Exception as ex:
@@ -502,7 +884,7 @@ class CalcAreaV(QWidget):
 
 
 class CalcAreaH(QWidget):
-    def __init__(self,setCrl,getPos,setPos,parent=None):
+    def __init__(self,setCrl,getPos,setPos,parent=None, data=None):
         super(CalcAreaH,self).__init__(parent)
         self.setCrl = setCrl
         self.getPos = getPos
@@ -516,17 +898,8 @@ class CalcAreaH(QWidget):
         HspacerItem = [QSpacerItem(2, 2, QSizePolicy.Expanding, QSizePolicy.Minimum) for i in range(2)]
         VspacerItem = [QSpacerItem(2, 2, QSizePolicy.Minimum, QSizePolicy.Expanding) for i in range(2)]
 
-        self.data = {'name':'',
-            "obj_type":"H_calc_area",
-            'line_color':'',
-            'Z':'1.8',
-            'X1':'',
-            'Y1':'',
-            'X2':'',
-            'Y2':'',
-            'dg':'0.5',
-            'dl':'0.01',
-            'da':'1'}
+        self.data = MenuData("horizontal_area") if data is None else data
+        self.data.setParent(self)
 
         self.name = QLineEdit()
         BoxLayoutB1 = QVBoxLayout()
@@ -610,10 +983,11 @@ class CalcAreaH(QWidget):
 
     def InitCords(self):
         cord = self.getPos()
-        self.data['X1'] = str(round(cord[0]/1000,3))
-        self.data['Y1'] = str(round(-cord[1]/1000,3))
-        self.data['X2'] = str(round(cord[2]/1000,3))
-        self.data['Y2'] = str(round(-cord[3]/1000,3))
+        self.data.X1.setNumber_gui(cord[0])
+        self.data.Y1.setNumber_gui(cord[1])
+        self.data.X2.setNumber_gui(cord[2])
+        self.data.Y2.setNumber_gui(cord[3])
+        #print(self.data.X1.text,self.data.Y1.text,self.data.X2.text,self.data.Y2.text)
 
     def getColor(self):
         color = QColorDialog.getColor(initial=QColor(self.line_color),parent=self,\
@@ -622,37 +996,40 @@ class CalcAreaH(QWidget):
         self.line.setStyleSheet( " background-color: %s; " % self.line_color )
 
     def save_data(self):
-        self.data['line_color'] = self.line_color
-        self.data["name"] = self.name.text()
-        self.data['Z'] = self.Z.text()
-        self.data['X1'] = self.X1.text()
-        self.data['Y1'] = self.Y1.text()
-        self.data['X2'] = self.X2.text()
-        self.data['Y2'] = self.Y2.text()
-        self.data['dg'] = self.dg.text()
-        self.data['dl'] = self.dl.text()
-        self.data['da'] = self.da.text()
+        self.data.line_color = self.line_color
+        self.data.name = self.name.text()
+        self.data.Z.setText(self.Z.text())
+        self.data.X1.setText(self.X1.text())
+        self.data.Y1.setText(self.Y1.text())
+        self.data.X2.setText(self.X2.text())
+        self.data.Y2.setText(self.Y2.text())
+        self.data.dg.setText(self.dg.text())
+        self.data.dl.setText(self.dl.text())
+        self.data.da.setText(self.da.text())
+
+        #print(self.data.X1.text,self.data.Y1.text,self.data.X2.text,self.data.Y2.text)
 
         self.close()
-        self.setPos((float(self.data['X1'])*1000,-float(self.data['Y1'])*1000,float(self.data['X2'])*1000,-float(self.data['Y2'])*1000))
+        self.setPos((self.data.X1.number_gui,self.data.Y1.number_gui,self.data.X2.number_gui,self.data.Y2.number_gui))
         self.setCrl()
         self.setListName()
 
     def show(self, *args, **kwargs):
         try:
-            self.name.setText(self.data["name"])
-            self.line_color = self.data['line_color'] if self.data['line_color'] != '' else QColor("black").name()
+            self.name.setText(self.data.name)
+            self.line_color = self.data.line_color if self.data.line_color != '' else QColor("black").name()
             self.line.setStyleSheet( " background-color: %s; " % self.line_color )
-            self.Z.setText(self.data['Z'])
-            self.dg.setText(self.data['dg'])
-            self.dl.setText(self.data['dl'])
-            self.da.setText(self.data['da'])
+            self.Z.setText(self.data.Z.text)
+            self.dg.setText(self.data.dg.text)
+            self.dl.setText(self.data.dl.text)
+            self.da.setText(self.data.da.text)
 
-            cord = self.getPos()
-            self.X1.setText(str(round(cord[0]/1000,3)))
-            self.Y1.setText(str(round(-cord[1]/1000,3)))
-            self.X2.setText(str(round(cord[2]/1000,3)))
-            self.Y2.setText(str(round(-cord[3]/1000,3)))
+            self.InitCords()
+
+            self.X1.setText(self.data.X1.text)
+            self.Y1.setText(self.data.Y1.text)
+            self.X2.setText(self.data.X2.text)
+            self.Y2.setText(self.data.Y2.text)
             
 
         except Exception as ex:
@@ -662,7 +1039,7 @@ class CalcAreaH(QWidget):
 
 
 class Conductor(QWidget):
-    def __init__(self,setCrl,getPos,setPos,parent=None):
+    def __init__(self,setCrl,getPos,setPos,parent=None, data= None):
         super(Conductor,self).__init__(parent)
         self.setCrl = setCrl
         self.getPos = getPos
@@ -676,15 +1053,9 @@ class Conductor(QWidget):
         HspacerItem = [QSpacerItem(2, 2, QSizePolicy.Expanding, QSizePolicy.Minimum) for i in range(2)]
         VspacerItem = [QSpacerItem(2, 2, QSizePolicy.Minimum, QSizePolicy.Expanding) for i in range(2)]
 
-        self.data = {'name':'',
-            "obj_type":"conductor",
-            'line_color':'000000',
-            'I':'',
-            'deg':'',
-            'tbl_cord':'',
-            'tbl_fmax':'',
-            'lbl_fmax':'',
-            'chck_fmax':False}
+        self.data = MenuData("conductor") if data is None else data
+        self.data.setParent(self)
+        self.trig = (data is None)
 
         self.name = QLineEdit()
         BoxLayoutB1 = QVBoxLayout()
@@ -795,11 +1166,11 @@ class Conductor(QWidget):
 
     def InitCords(self):
         self.get_table_cord = self.getPos()
-        self.data['tbl_cord'] = []
-        for i in self.get_table_cord:
-            self.data['tbl_cord'].append([str(round(i[0]/10**3,3)),
-                                        str(round(-i[1]/10**3,3)), ""])
-
+        self.data.tbl_XY.setNumber_gui(self.get_table_cord)
+        if self.trig:
+            self.data.tbl_Z.setText([""]*len(self.get_table_cord))
+            self.data.tbl_fmax.setText([""]*len(self.get_table_cord))
+            self.trig = False
   
     def ResizeTables(self):
         try:
@@ -833,40 +1204,42 @@ class Conductor(QWidget):
             self.line.setStyleSheet( " background-color: %s; " % self.line_color )
 
     def save_data(self):
-        self.data['line_color'] = self.line_color
-        self.data["name"] = self.name.text()
-        self.data['I'] = self.I.text()
-        self.data['deg'] = self.deg.text()
-        self.data['lbl_fmax'] = self.fmax.text()
-        self.data['tbl_cord'] = []
-        self.data['tbl_fmax'] = []
-        self.data['chck_fmax'] = True if self.check_fmax.checkState()==Qt.Checked else False
+        try:
+            self.data.line_color = self.line_color
+            self.data.name = self.name.text()
+            self.data.I.setText(self.I.text())
+            self.data.deg.setText(self.deg.text())
+            self.data.lbl_fmax.setText(self.fmax.text())
+            self.data.chck_fmax = True if self.check_fmax.checkState()==Qt.Checked else False
 
-        for i in range(self.old_rows):
-            self.data['tbl_cord'].append([self.table_cord.item(i, 0).text(),
-                                        self.table_cord.item(i, 1).text(), 
-                                        self.table_cord.item(i, 2).text()])
+            self.data.tbl_XY.setText([[self.table_cord.item(i, 0).text(),
+                                            self.table_cord.item(i, 1).text()] for i in range(self.old_rows)])
 
-        for i in range(self.old_rows-1):
-            self.data['tbl_fmax'].append(self.table_fmax.item(i, 2).text())
-        self.close()
-        self.setPos([[float(i[0])*1000,float(i[1])*-1000] for i in self.data['tbl_cord']])
-        self.setCrl()
-        self.setListName()
+            self.data.tbl_Z.setText([self.table_cord.item(i, 2).text() for i in range(self.old_rows)])
+
+            self.data.tbl_fmax.setText([self.table_fmax.item(i, 2).text() for i in range(self.old_rows-1)])
+            
+            self.close()
+            self.setPos(self.data.tbl_XY.number_gui)
+            self.setCrl()
+            self.setListName()
+        except Exception as ex:
+            print("save_data",ex)
 
     def show(self, *args, **kwargs):
         try:
-            self.name.setText(self.data["name"])
-            self.line_color = self.data['line_color'] if self.data['line_color'] != '' else QColor("black").name()
+            self.name.setText(self.data.name)
+            self.line_color = self.data.line_color if self.data.line_color != '' else QColor("black").name()
             self.line.setStyleSheet( " background-color: %s; " % self.line_color )
-            self.I.setText(self.data['I'])
-            self.deg.setText(self.data['deg'])
+            self.I.setText(self.data.I.text)
+            self.deg.setText(self.data.deg.text)
 
             self.get_table_cord = self.getPos()
-            table_cord = self.get_table_cord
 
-            self.cord_col = len(table_cord)
-            self.old_rows = len(table_cord)
+            self.cord_col = len(self.get_table_cord)
+            self.old_rows = self.cord_col
+
+            self.data.tbl_XY.setNumber_gui(self.get_table_cord)
 
             self.d_zp.setValue(self.cord_col)
 
@@ -874,17 +1247,19 @@ class Conductor(QWidget):
 
             self.table_fmax.setRowCount(self.cord_col-1)
 
+            tbl_XY = self.data.tbl_XY.text
+            tbl_Z = self.data.tbl_Z.text
+            tbl_fmax = self.data.tbl_fmax.text
+
             for i in range(self.cord_col):
-                self.table_cord.setItem(i,0, QTableWidgetItem(str(round(table_cord[i][0]/10**3,3))))
-                self.table_cord.setItem(i,1, QTableWidgetItem(str(round(-table_cord[i][1]/10**3,3))))
-                self.table_cord.setItem(i,2, QTableWidgetItem(
-                    (self.data['tbl_cord'][i][2] if self.data['tbl_cord']!="" else "")))
+                self.table_cord.setItem(i,0, QTableWidgetItem(tbl_XY[i][0]))
+                self.table_cord.setItem(i,1, QTableWidgetItem(tbl_XY[i][1]))
+                self.table_cord.setItem(i,2, QTableWidgetItem(tbl_Z[i]))
 
             for i in range(self.cord_col-1):
                 self.table_fmax.setItem(i,0, QTableWidgetItem(str(i+1)))
                 self.table_fmax.setItem(i,1, QTableWidgetItem(str(i+2)))
-                self.table_fmax.setItem(i,2, QTableWidgetItem(
-                    (self.data['tbl_fmax'][i] if self.data['tbl_fmax']!="" else "")))
+                self.table_fmax.setItem(i,2, QTableWidgetItem(tbl_fmax[i]))
 
         except Exception as ex:
             print(ex)
@@ -909,7 +1284,7 @@ class Conductor(QWidget):
 
 
 class Reactor(QWidget):
-    def __init__(self,setCrl,getPos,setPos, parent=None):
+    def __init__(self,setCrl,getPos,setPos, parent=None, data=None):
         super(Reactor,self).__init__(parent)
 
         self.setFixedSize(620,240)
@@ -921,27 +1296,9 @@ class Reactor(QWidget):
         
         HspacerItem = [QSpacerItem(2, 2, QSizePolicy.Expanding, QSizePolicy.Minimum) for i in range(2)]
         #VspacerItem = QSpacerItem(2, 2, QSizePolicy.Minimum, QSizePolicy.Expanding)
-
-        self.data = {'name':'',
-            "obj_type":"reactor",
-            'body_color':'#ff0000',
-            'line_color':'000000',
-            'I':'',
-            'deg':'',
-            'X':'',
-            'Y':'',
-            'Z':'',
-            'Rnar':'',
-            'Rvn':'',
-            'H':'',
-            'W':'',
-            'm':'',
-            'dP':'',
-            'Q':'',
-            'Unom':'',
-            'met':'',
-            'Xl':'',
-            'Inom':''}
+        
+        self.data = MenuData("reactor") if data is None else data
+        self.data.setParent(self)
 
         BoxLayout1 = QHBoxLayout()
 
@@ -1128,9 +1485,9 @@ class Reactor(QWidget):
 
     def InitCords(self):
         d1,d2,d3 = self.getPos()
-        self.data['X'] = str(round(d1/10**3,3))
-        self.data['Y'] = str(round(d2/10**3,3))
-        self.data['Rnar'] = str(round(d3/10**3,3))
+        self.data.X.setNumber_gui(d1)
+        self.data.Y.setNumber_gui(d2)
+        self.data.Rnar.setNumber_gui(d3)
 
     def getColor(self,key):
         if key==1:
@@ -1154,66 +1511,69 @@ class Reactor(QWidget):
         Unom = float(self.Unom.text()) if self.Unom.text() !='' else None
         Inom = float(self.Inom.text()) if self.Inom.text() !='' else None
         met = self.met.currentText()
-        rez = main_calculate.SolenParam(dP,met,Rnar,Rvn,H,50,Q,Unom,Xl,Inom)
+        rez = SolenParam(dP,met,Rnar,Rvn,H,50,Q,Unom,Xl,Inom)
         if rez != None:
             self.W.setText(str(rez[0]))
             self.m.setText(str(rez[1]))
 
     def save_data(self):
-        self.data["name"] = self.name.text()
-        self.data['body_color'] = self.body_color
-        self.data['line_color'] = self.line_color
-        self.data['I'] = self.I.text()
-        self.data['deg'] = self.deg.text()
-        self.data['X'] = self.X.text()
-        self.data['Y'] = self.Y.text()
-        self.data['Z'] = self.Z.text()
-        self.data['Rnar'] = self.Rnar.text()
-        self.data['Rvn'] = self.Rvn.text()
-        self.data['H'] = self.H.text()
-        self.data['W'] = self.W.text()
-        self.data['m'] = self.m.text()
-        self.data['dP'] = self.dP.text()
-        self.data['Q'] = self.Q.text()
-        self.data['Unom'] = self.Unom.text()
-        self.data['met'] = self.met.currentText()
-        self.data['Xl'] = self.Xl.text()
-        self.data['Inom'] = self.Inom.text()
-        self.close()
-        self.setPos((float(self.data['X'])*1000,float(self.data['Y'])*-1000,float(self.data['Rnar'])*1000))
-        self.setCrl()
-        self.setListName()
+        try:
+            self.data.name = self.name.text()
+            self.data.body_color = self.body_color
+            self.data.line_color = self.line_color
+            self.data.I.setText(self.I.text())
+            self.data.deg.setText(self.deg.text())
+            self.data.X.setText(self.X.text())
+            self.data.Y.setText(self.Y.text())
+            self.data.Z.setText(self.Z.text())
+            self.data.Rnar.setText(self.Rnar.text())
+            self.data.Rvn.setText(self.Rvn.text())
+            self.data.H.setText(self.H.text())
+            self.data.W.setText(self.W.text())
+            self.data.m.setText(self.m.text())
+            self.data.dP.setText(self.dP.text())
+            self.data.Q.setText(self.Q.text())
+            self.data.Unom.setText(self.Unom.text())
+            self.data.met = self.met.currentText()
+            self.data.Xl.setText(self.Xl.text())
+            self.data.Inom.setText(self.Inom.text())
+            self.close()
+            self.setPos((self.data.X.number_gui,self.data.Y.number_gui,self.data.Rnar.number_gui))
+            self.setCrl()
+            self.setListName()
+        except Exception as ex:
+            print(ex)
 
     def show(self, *args, **kwargs):
         try:
-            self.name.setText(self.data["name"])
-            self.body_color = self.data['body_color'] if self.data['body_color'] != '' else QColor("red").name()
+            self.name.setText(self.data.name)
+            self.body_color = self.data.body_color if self.data.body_color != '' else QColor("red").name()
             self.body.setStyleSheet( " background-color: %s; " % self.body_color )
-            self.line_color = self.data['line_color'] if self.data['line_color'] != '' else QColor("black").name()
+            self.line_color = self.data.line_color if self.data.line_color != '' else QColor("black").name()
             self.line.setStyleSheet( " background-color: %s; " % self.line_color )
-            self.I.setText(self.data['I'])
-            self.deg.setText(self.data['deg'])
+            self.I.setText(self.data.I.text)
+            self.deg.setText(self.data.deg.text)
 
             x11,y11,r11 = self.getPos()
             
-            self.data['X'] = str(round(x11/1000,3))
-            self.data['Y'] = str(round(y11/1000,3))
-            self.data['Rnar'] = str(round(r11/1000,3))
+            self.data.X.setNumber_gui(x11)
+            self.data.Y.setNumber_gui(y11)
+            self.data.Rnar.setNumber_gui(r11)
 
-            self.X.setText(self.data['X'])
-            self.Y.setText(self.data['Y'])
-            self.Z.setText(self.data['Z'])
-            self.Rnar.setText(self.data['Rnar'])
-            self.Rvn.setText(self.data['Rvn'])
-            self.H.setText(self.data['H'])
-            self.W.setText(self.data['W'])
-            self.m.setText(self.data['m'])
-            self.dP.setText(self.data['dP'])
-            self.Q.setText(self.data['Q'])
-            self.Unom.setText(self.data['Unom'])
-            self.met.setCurrentText(self.data['met'])
-            self.Xl.setText(self.data['Xl'])
-            self.Inom.setText(self.data['Inom'])
+            self.X.setText(self.data.X.text)
+            self.Y.setText(self.data.Y.text)
+            self.Z.setText(self.data.Z.text)
+            self.Rnar.setText(self.data.Rnar.text)
+            self.Rvn.setText(self.data.Rvn.text)
+            self.H.setText(self.data.H.text)
+            self.W.setText(self.data.W.text)
+            self.m.setText(self.data.m.text)
+            self.dP.setText(self.data.dP.text)
+            self.Q.setText(self.data.Q.text)
+            self.Unom.setText(self.data.Unom.text)
+            self.met.setCurrentText(self.data.met)
+            self.Xl.setText(self.data.Xl.text)
+            self.Inom.setText(self.data.I.text)
         except Exception as ex:
             print(ex)
         
@@ -1224,12 +1584,14 @@ class Reactor(QWidget):
 
 
 if __name__ == '__main__':
-    from PyQt5.QtWidgets import QApplication
+    """ from PyQt5.QtWidgets import QApplication
     import sys
     app = QApplication(sys.argv)
     ex = Save_Widget([],lambda a,b:print(a,b))
     ex.show()
-    sys.exit(app.exec_())
+    sys.exit(app.exec_()) """
+
+
         
 
         

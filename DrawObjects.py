@@ -31,7 +31,7 @@ class GraphicsLineItem(QGraphicsLineItem):
     brush=QBrush(QColor(255, 0, 0, 100))
     
 
-    def __init__(self, cord,pen=pen,brush=brush):
+    def __init__(self, cord,pen=pen,brush=brush,data=None):
         """ Инициализируйте форму. """
 
         super().__init__(cord[0],cord[1],cord[2],cord[3])
@@ -53,9 +53,10 @@ class GraphicsLineItem(QGraphicsLineItem):
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
         self.setFlag(QGraphicsItem.ItemIsFocusable, True)
-        self.updateHandlesPos()
 
-        self.menu = CalcAreaV(self.setCrl, self.getPos, self.setPos)
+        self.menu = CalcAreaV(self.setCrl, self.getPos, self.setPos,data=data)
+        self.setCrl()
+        self.updateHandlesPos()
 
     @property
     def handleSize(self):
@@ -67,7 +68,7 @@ class GraphicsLineItem(QGraphicsLineItem):
 
     def setCrl(self):
         try:
-            self.pen=QPen(QColor(self.menu.data['line_color']), 0, Qt.DashLine)
+            self.pen=QPen(QColor(self.menu.data.line_color), 0, Qt.DashLine)
             #print("testcolor")
         except Exception as ex:
             print(ex)
@@ -249,7 +250,7 @@ class GraphicsPolylineItem(QGraphicsItem):
     pen=QPen(QColor(0, 0, 0), 0, Qt.SolidLine)
     brush=QBrush(QColor(255, 0, 0, 100))
 
-    def __init__(self, scord,pen=pen,brush=brush):
+    def __init__(self, scord,pen=pen,brush=brush,data=None,calc_func=None):
         """ Инициализируйте форму. """
         self.handleCursors = {i+1:Qt.SizeAllCursor for i in range(len(scord))}
         self.points = scord
@@ -266,6 +267,9 @@ class GraphicsPolylineItem(QGraphicsItem):
         self.pen=pen
         self.brush=brush
 
+        self.calc_func = calc_func
+        self.re_calc = True
+
         # Если установлено значение true, этот элемент будет принимать 
         # события при наведении курсора.
         self.setAcceptHoverEvents(True)                                # <---
@@ -274,9 +278,14 @@ class GraphicsPolylineItem(QGraphicsItem):
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
         self.setFlag(QGraphicsItem.ItemIsFocusable, True)
+
+        self.menu = Conductor(self.setCrl, self.getPos, self.setPos,data=data)
+        self.setCrl()
         self.updateHandlesPos()
 
-        self.menu = Conductor(self.setCrl, self.getPos, self.setPos)
+    def CalcWhenShow(self):
+        if self.calc_func is not None and self.re_calc:
+            self.calc_func("sourses")
 
     @property
     def handleSize(self):
@@ -288,7 +297,7 @@ class GraphicsPolylineItem(QGraphicsItem):
 
     def setCrl(self):
         try:
-            self.pen=QPen(QColor(self.menu.data['line_color']), 0, Qt.SolidLine)
+            self.pen=QPen(QColor(self.menu.data.line_color), 0, Qt.SolidLine)
             #print("testcolor")
         except Exception as ex:
             print(ex)
@@ -344,6 +353,9 @@ class GraphicsPolylineItem(QGraphicsItem):
         self.delta = None
         self.mousePressRect = None
         self.update()
+
+        if self.calc_func is not None and self.re_calc:
+            self.calc_func("sourses")
 
     def mouseDoubleClickEvent(self,mouseEvent):
         """ Запуск события назначенного на двойной клик мыши """
@@ -436,6 +448,7 @@ class GraphicsPolylineItem(QGraphicsItem):
         return self.points
 
     def setPos(self,cord):
+        #print("set pos conductor")
         self.points = cord
         self.handleCursors = {i+1:Qt.SizeAllCursor for i in range(len(cord))}
         self.updateHandlesPos()
@@ -476,7 +489,7 @@ class GraphicsCircleItem(QGraphicsEllipseItem):
     pen=QPen(QColor(0, 0, 0), 0, Qt.SolidLine)
     brush=QBrush(QColor(255, 0, 0, 100))
     
-    def __init__(self, cord,pen=pen,brush=brush):
+    def __init__(self, cord,pen=pen,brush=brush,data=None,calc_func=None):
         """ Инициализируйте форму. """
         if len(cord)==4:
             super().__init__(cord[0],cord[1],cord[2],cord[3])
@@ -494,6 +507,9 @@ class GraphicsCircleItem(QGraphicsEllipseItem):
         self.pen=pen
         self.brush=brush
 
+        self.calc_func = calc_func
+        self.re_calc = True
+
         # Если установлено значение true, этот элемент будет принимать 
         # события при наведении курсора.
         self.setAcceptHoverEvents(True)                                # <---
@@ -502,10 +518,15 @@ class GraphicsCircleItem(QGraphicsEllipseItem):
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
         self.setFlag(QGraphicsItem.ItemIsFocusable, True)
-        self.updateHandlesPos()
 
         # Инициируем меню
-        self.menu = Reactor(self.setCrl, self.getPos, self.setPos )
+        self.menu = Reactor(self.setCrl, self.getPos, self.setPos,data=data)
+        self.setCrl()
+        self.updateHandlesPos()
+
+    def CalcWhenShow(self):
+        if self.calc_func is not None and self.re_calc:
+            self.calc_func("sourses")
 
     @property
     def handleSize(self):
@@ -517,9 +538,9 @@ class GraphicsCircleItem(QGraphicsEllipseItem):
 
     def setCrl(self):
         try:
-            c = QColor(self.menu.data['body_color'])
+            c = QColor(self.menu.data.body_color)
             c.setAlpha(100)
-            pen=QPen(QColor(self.menu.data['line_color']), 0, Qt.SolidLine)
+            pen=QPen(QColor(self.menu.data.line_color), 0, Qt.SolidLine)
             brush=QBrush(c)
             self.setColorObject(pen=pen,brush=brush)
         except Exception as ex:
@@ -572,6 +593,9 @@ class GraphicsCircleItem(QGraphicsEllipseItem):
         self.mousePressPos  = None
         self.mousePressRect = None
         self.update()
+
+        if self.calc_func is not None and self.re_calc:
+            self.calc_func("sourses")
 
     """ def mouseDoubleClickEvent(self,mouseEvent):
         print("я работаю")
@@ -712,7 +736,7 @@ class GraphicsCircleItem(QGraphicsEllipseItem):
     def getPos(self):
         """ Получение координат и радиуса элипса """
         r = self.mapRectToScene(self.rect()).getRect()
-        return r[0]+r[2]/2,-(r[1]+r[2]/2),r[2]/2
+        return r[0]+r[2]/2,(r[1]+r[2]/2),r[2]/2
 
     def setColorObject(self,pen=None,brush=None):
         """ Изменение цвета обьекта """
@@ -763,7 +787,7 @@ class GraphicsRectItem(QGraphicsRectItem):
     pen=QPen(QColor(0, 0, 0), 0, Qt.DashLine)
     brush=QBrush(QColor(0, 0, 255, 10))
 
-    def __init__(self, cord,pen=pen,brush=brush):
+    def __init__(self, cord,pen=pen,brush=brush,data=None):
         """ Инициализируйте форму. """
 
         super().__init__(cord[0],cord[1],cord[2]-cord[0],cord[3]-cord[1])
@@ -784,10 +808,11 @@ class GraphicsRectItem(QGraphicsRectItem):
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
         self.setFlag(QGraphicsItem.ItemIsFocusable, True)
-        self.updateHandlesPos()
 
         # Инициируем меню
-        self.menu = CalcAreaH(self.setCrl, self.getPos, self.setPos)
+        self.menu = CalcAreaH(self.setCrl, self.getPos, self.setPos,data=data)
+        self.setCrl()
+        self.updateHandlesPos()
 
     @property
     def handleSize(self):
@@ -801,7 +826,7 @@ class GraphicsRectItem(QGraphicsRectItem):
         try:
             #c = QColor(self.menu.data['body_color'])
             #c.setAlpha(100)
-            pen=QPen(QColor(self.menu.data['line_color']), 0, Qt.DashLine)
+            pen=QPen(QColor(self.menu.data.line_color), 0, Qt.DashLine)
             #brush=QBrush(c)
             self.setColorObject(pen=pen)
         except Exception as ex:
@@ -1054,7 +1079,7 @@ class OneCalcCircle(QGraphicsEllipseItem):
     pen=QPen(QColor(0, 0, 0), 0, Qt.SolidLine)
     brush=QBrush(QColor(0, 0, 255, 70))
     
-    def __init__(self, cord, func=None ,pen=pen,brush=brush):
+    def __init__(self, cord,pen=pen,brush=brush,data=None,calc_func=None):
         """ Инициализируйте форму. """
         if len(cord)==2:
             super().__init__(cord[0]-self.hndl,cord[1]-self.hndl,self.hndl*2,self.hndl*2)
@@ -1069,7 +1094,9 @@ class OneCalcCircle(QGraphicsEllipseItem):
 
         self.pen=pen
         self.brush=brush
-        self.func = func
+
+        self.calc_func = calc_func
+        self.re_calc = True
 
         # Если установлено значение true, этот элемент будет принимать 
         # события при наведении курсора.
@@ -1079,18 +1106,16 @@ class OneCalcCircle(QGraphicsEllipseItem):
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
         self.setFlag(QGraphicsItem.ItemIsFocusable, True)
-        #self.updateHandlesPos()
 
         # Инициируем меню
-        self.menu = OnePoint(self.setCrl, self.getPos, self.setPos )
-
-        self.re_calc = False
+        self.menu = OnePoint(self.setCrl, self.getPos, self.setPos,data=data)
+        self.setCrl()
+        self.updateHandlesPos()
 
         
-
     def CalcWhenShow(self):
-        if self.func is not None:
-            self.func()
+        if self.calc_func is not None and self.re_calc:
+            self.calc_func("areas",data=self.menu.data)
 
     @property
     def handleSize(self):
@@ -1102,7 +1127,7 @@ class OneCalcCircle(QGraphicsEllipseItem):
 
     def setCrl(self):
         try:
-            pen=QPen(QColor(self.menu.data['line_color']), 0, Qt.SolidLine)
+            pen=QPen(QColor(self.menu.data.line_color), 0, Qt.SolidLine)
             self.setColorObject(pen=pen)
         except Exception as ex:
             print(ex)
@@ -1122,9 +1147,8 @@ class OneCalcCircle(QGraphicsEllipseItem):
         self.mousePressRect = None
         self.update()
 
-        if self.func is not None and self.re_calc:
-            self.re_calc = False
-            self.func()
+        if self.calc_func is not None and self.re_calc:
+            self.calc_func("areas",data=self.menu.data)
 
         
     def updateHandlesPos(self):
@@ -1141,7 +1165,7 @@ class OneCalcCircle(QGraphicsEllipseItem):
         point_center = self.rect().center()
         r = self.rect().width()/2
 
-        text_rect = QRectF(QFontMetrics(QFont('Arial',o*2.2)).boundingRect(self.menu.data['result'])) #Определяем размеры текста
+        text_rect = QRectF(QFontMetrics(QFont('Arial',o*2.2)).boundingRect(self.menu.data.result.text)) #Определяем размеры текста
         text_rect.setRect(point_center.x()-text_rect.width()/2-o,point_center.y()-r-text_rect.height(),text_rect.width()+o*2,text_rect.height())
         self.text_rect = text_rect
 
@@ -1175,10 +1199,10 @@ class OneCalcCircle(QGraphicsEllipseItem):
         painter.setFont(fnt)
 
 
-        text_rect = painter.boundingRect(QRectF(0,0,0,0), Qt.AlignCenter,self.menu.data['result'])
+        text_rect = painter.boundingRect(QRectF(0,0,0,0), Qt.AlignCenter,self.menu.data.result.text)
         text_rect.setRect(point_center.x()-text_rect.width()/2,point_center.y()-r-text_rect.height(),text_rect.width(),text_rect.height())
 
-        painter.drawText(text_rect,self.menu.data['result'])
+        painter.drawText(text_rect,self.menu.data.result.text)
 
         painter.drawRect(self.text_rect)
      
