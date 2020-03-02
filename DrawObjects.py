@@ -6,7 +6,7 @@ from PyQt5.QtGui  import QBrush, QPainterPath, QPainter, QColor, QPen, QPolygonF
 from PyQt5.QtWidgets import QGraphicsRectItem, QGraphicsEllipseItem,\
                              QGraphicsLineItem, QGraphicsItem,QApplication
 
-from ObjectsMenu import Reactor, Conductor, CalcAreaH, CalcAreaV, OnePoint
+from ObjectsMenu import Reactor, Conductor, CalcAreaH, CalcAreaV, OnePoint, Recconductor
 
 import math
 
@@ -57,6 +57,9 @@ class GraphicsLineItem(QGraphicsLineItem):
         self.menu = CalcAreaV(self.setCrl, self.getPos, self.setPos,data=data)
         self.setCrl()
         self.updateHandlesPos()
+
+    def dragable(self,trig):
+        self.setFlag(QGraphicsItem.ItemIsMovable, trig)
 
     @property
     def handleSize(self):
@@ -283,9 +286,256 @@ class GraphicsPolylineItem(QGraphicsItem):
         self.setCrl()
         self.updateHandlesPos()
 
+    def dragable(self,trig):
+        self.setFlag(QGraphicsItem.ItemIsMovable, trig)
+
     def CalcWhenShow(self):
         if self.calc_func is not None and self.re_calc:
             self.calc_func("sourses")
+
+    @property
+    def handleSize(self):
+        return self.hndl
+
+    @property
+    def handleSpace(self):
+        return -self.hndl/2
+
+    def setCrl(self):
+        try:
+            self.pen=QPen(QColor(self.menu.data.line_color), 0, Qt.SolidLine)
+            #print("testcolor")
+        except Exception as ex:
+            print(ex)
+
+
+    def handleAt(self, point):
+        """ Возвращает маркер изменения размера ниже заданной точки. """
+        for k, v, in self.handles.items():
+            if v.contains(point):
+                return k
+        return None
+
+        
+
+    def hoverMoveEvent(self, moveEvent):
+        print("gegegege")
+        """ Выполняется, когда мышь перемещается по фигуре (NOT PRESSED). """
+        self.look_object = True
+        if self.isSelected():
+            handle = self.handleAt(moveEvent.pos())
+            cursor = Qt.ArrowCursor if handle is None else self.handleCursors[handle]
+            self.setCursor(cursor)
+        super().hoverMoveEvent(moveEvent)
+
+
+    def hoverLeaveEvent(self, moveEvent):
+        """ Выполняется, когда мышь покидает фигуру (NOT PRESSED). """
+        self.look_object = False
+        self.setCursor(Qt.ArrowCursor)
+        super().hoverLeaveEvent(moveEvent)
+
+
+    def mousePressEvent(self, mouseEvent):
+        #print("bbb")
+        """ Выполняется при нажатии мыши на элемент. """
+        self.handleSelected = self.handleAt(mouseEvent.pos())
+        self.mousePressPos  = mouseEvent.pos()
+        self.delta = [[i[0]-self.mousePressPos.x(),i[1]-self.mousePressPos.y()] for i in self.points]
+        if self.handleSelected:
+            self.mousePressRect = self.boundingRect()
+        super().mousePressEvent(mouseEvent)
+
+    def mouseMoveEvent(self, mouseEvent):
+        """ Выполняется, когда мышь перемещается над элементом при нажатии. """ 
+        #super().mouseMoveEvent(mouseEvent)
+        self.interactiveResize(mouseEvent.pos())
+        self.update()
+        
+
+
+    def mouseReleaseEvent(self, mouseEvent):
+        """ Выполняется, когда мышь освобождается от элемента. """
+        super().mouseReleaseEvent(mouseEvent)
+        self.handleSelected = None
+        #self.mousePressPos  = None
+        #self.delta = None
+        #self.mousePressRect = None
+        self.update()
+
+        if self.calc_func is not None and self.re_calc:
+            self.calc_func("sourses")
+
+    def mouseDoubleClickEvent(self,mouseEvent):
+        """ Запуск события назначенного на двойной клик мыши """
+        print("я работаю")
+        super().mouseDoubleClickEvent(mouseEvent)
+  
+    def boundingRect(self):
+        """ Возвращает ограничивающий прямоугольник фигуры 
+            (включая маркеры изменения размера). """ 
+        o = self.handleSize + self.handleSpace
+        x = [i[0] for i in self.points]
+        y = [i[1] for i in self.points]
+
+        return QRectF(QPointF(min(x)-o,min(y)-o),QPointF(max(x)+o,max(y)+o))
+
+
+    def updateHandlesPos(self):
+        """ Обновите текущие маркеры изменения размера 
+            в соответствии с размером и положением фигуры. """
+        s = self.handleSize
+        for i in range(len(self.points)):
+            self.handles[i+1] = QRectF(self.points[i][0]-s/2, self.points[i][1]-s/2, s, s)
+
+    def interactiveResize(self, mousePos):
+        """ Выполните форму интерактивного изменения размера. """
+        if self.handleSelected is not None:
+            i = self.handleSelected-1
+            self.prepareGeometryChange()
+            (dx,dy) = self.delta[i]
+            self.points[i] = [mousePos.x()+dx,mousePos.y()+dy]
+            self.updateHandlesPos()
+        else:
+            self.prepareGeometryChange() # важная штука
+            self.points = [[mousePos.x()+dx,mousePos.y()+dy] for dx,dy in self.delta]
+            self.updateHandlesPos()
+
+    def BoundingPoligon(self,line):
+        #print("gegegege")
+        """ Возращает полигон, ограничивающий фигуру """
+        o = self.handleSize + self.handleSpace
+        alf = math.radians(line.angle())
+
+        x1t = line.x1()-o*(math.cos(alf)+math.cos(alf-math.pi/2))
+        x2t = line.x2()+o*(math.cos(alf)-math.cos(alf-math.pi/2))
+
+        x1b = line.x1()-o*(math.cos(alf)+math.cos(alf+math.pi/2))
+        x2b = line.x2()+o*(math.cos(alf)-math.cos(alf+math.pi/2))
+
+        y1t = line.y1()+o*(math.sin(alf)+math.sin(alf-math.pi/2))
+        y2t = line.y2()-o*(math.sin(alf)-math.sin(alf-math.pi/2))
+
+        y1b = line.y1()+o*(math.sin(alf)+math.sin(alf+math.pi/2))
+        y2b = line.y2()-o*(math.sin(alf)-math.sin(alf+math.pi/2))
+        
+        return QPolygonF([QPointF(x1t,y1t),QPointF(x2t,y2t),QPointF(x2b,y2b),QPointF(x1b,y1b)])
+
+    def shape(self):
+        """ Возвращает форму этого элемента в виде QPainterPath в локальных координатах. """
+        path = QPainterPath()
+        for i in range(1,len(self.points)):
+            p = self.BoundingPoligon(QLineF(QPointF(self.points[i-1][0],self.points[i-1][1]),\
+                            QPointF(self.points[i][0],self.points[i][1])))
+            path.addPolygon(p)
+        #path.addRect(self.boundingRect())
+        if self.isSelected():
+            for shape in self.handles.values():
+                path.addEllipse(shape)
+        return path
+
+
+
+    def paint(self, painter, option, widget=None):
+        """ Нарисуйте узел в графическом представлении. """
+        painter.setBrush(self.brush)
+        painter.setPen(self.pen)
+        #print(self.points,"move")
+        #print(self.brush.color().name())
+        """ p = [QPointF(i[0],i[1]) for i in self.points]
+        d  = lambda p:painter.drawPolyline(*p)
+        d(p) """
+
+        for i in range(1,len(self.points)):
+            painter.drawLine(QPointF(self.points[i-1][0],self.points[i-1][1]),\
+                            QPointF(self.points[i][0],self.points[i][1]))
+
+        if self.look_object:
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setBrush(QBrush(QColor(255, 0, 0, 255)))
+            painter.setPen(QPen(QColor(0, 0, 0, 255), 1.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            for handle, rect in self.handles.items():
+                if self.handleSelected is None or handle == self.handleSelected:
+                    painter.drawEllipse(rect)
+
+    def getPos(self):
+        """ Получение координат полилинии """
+        #[[i.mapToScene.x(),i.mapToScene.y()] for i in self.points]
+        #a = [[i.x(),i.y()] for i in [self.mapToScene(j[0],j[1]) for j in self.points]] #QPointF(j[0],j[1])
+        return self.points
+        #return a
+
+    def setPos(self,cord):
+        #print("set pos conductor")
+        self.points = cord
+        self.handleCursors = {i+1:Qt.SizeAllCursor for i in range(len(cord))}
+        self.updateHandlesPos()
+        self.update()
+
+        if self.calc_func is not None:
+            self.calc_func("sourses")
+
+
+    def setColorObject(self,pen=None,brush=None):
+        """ Изменение цвета обьекта """
+        if pen: self.pen=pen
+        if brush: self.brush=brush
+        self.update()
+
+    def mouseDoubleClickEvent(self, mouseEvent):
+        self.menu.show()
+
+
+class RecPolylineItem(QGraphicsItem):
+    """ Класс реализующий интерактивный объект полилинию """
+    obj_type = "recpolyline"
+    hndl = +8
+    #handleSize  = handle #+8.0 #Размеры точек управления размерами фигуры
+    #handleSpace = -handle/2 #-4.0 #Размеры точек управления размерами фигуры
+
+
+    pen=QPen(QColor(0, 0, 0), 0, Qt.SolidLine)
+    brush=QBrush(QColor(255, 0, 0, 100))
+
+    def __init__(self, scord,pen=pen,brush=brush,data=None):#,calc_func=None
+        """ Инициализируйте форму. """
+        self.handleCursors = {i+1:Qt.SizeAllCursor for i in range(len(scord))}
+        self.points = scord
+
+        super().__init__()
+
+        self.handles = {}
+        self.handleSelected = None
+        self.mousePressPos  = None
+        self.mousePressRect = None
+        self.delta = None
+        self.look_object = False
+
+        self.pen=pen
+        self.brush=brush
+
+        #self.calc_func = calc_func
+        self.re_calc = True
+
+        # Если установлено значение true, этот элемент будет принимать 
+        # события при наведении курсора.
+        self.setAcceptHoverEvents(True)                                # <---
+
+        self.setFlag(QGraphicsItem.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.ItemIsSelectable, True)
+        self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
+        self.setFlag(QGraphicsItem.ItemIsFocusable, True)
+
+        self.menu = Recconductor(self.setCrl, self.getPos, self.setPos,data=data)
+        self.setCrl()
+        self.updateHandlesPos()
+
+    def dragable(self,trig):
+        self.setFlag(QGraphicsItem.ItemIsMovable, trig)
+
+    """ def CalcWhenShow(self):
+        if self.calc_func is not None and self.re_calc:
+            self.calc_func("receivers") """
 
     @property
     def handleSize(self):
@@ -330,32 +580,32 @@ class GraphicsPolylineItem(QGraphicsItem):
 
 
     def mousePressEvent(self, mouseEvent):
+        #print("bbb")
         """ Выполняется при нажатии мыши на элемент. """
         self.handleSelected = self.handleAt(mouseEvent.pos())
+        self.mousePressPos  = mouseEvent.pos()
+        self.delta = [[i[0]-self.mousePressPos.x(),i[1]-self.mousePressPos.y()] for i in self.points]
         if self.handleSelected:
-            self.mousePressPos  = mouseEvent.pos()
-            self.delta = [[i[0]-self.mousePressPos.x(),i[1]-self.mousePressPos.y()] for i in self.points]
             self.mousePressRect = self.boundingRect()
         super().mousePressEvent(mouseEvent)
 
     def mouseMoveEvent(self, mouseEvent):
         """ Выполняется, когда мышь перемещается над элементом при нажатии. """ 
-        if self.handleSelected is not None:
-            self.interactiveResize(mouseEvent.pos())
-        else:
-            super().mouseMoveEvent(mouseEvent)
-
+        #super().mouseMoveEvent(mouseEvent)
+        self.interactiveResize(mouseEvent.pos())
+        self.update()
+        
     def mouseReleaseEvent(self, mouseEvent):
         """ Выполняется, когда мышь освобождается от элемента. """
         super().mouseReleaseEvent(mouseEvent)
         self.handleSelected = None
-        self.mousePressPos  = None
-        self.delta = None
-        self.mousePressRect = None
+        #self.mousePressPos  = None
+        #self.delta = None
+        #self.mousePressRect = None
         self.update()
 
-        if self.calc_func is not None and self.re_calc:
-            self.calc_func("sourses")
+        """ if self.calc_func is not None and self.re_calc:
+            self.calc_func("sourses") """
 
     def mouseDoubleClickEvent(self,mouseEvent):
         """ Запуск события назначенного на двойной клик мыши """
@@ -381,11 +631,16 @@ class GraphicsPolylineItem(QGraphicsItem):
 
     def interactiveResize(self, mousePos):
         """ Выполните форму интерактивного изменения размера. """
-        i = self.handleSelected-1
-        self.prepareGeometryChange()
-        (dx,dy) = self.delta[i]
-        self.points[i] = [mousePos.x()+dx,mousePos.y()+dy]
-        self.updateHandlesPos()
+        if self.handleSelected is not None:
+            i = self.handleSelected-1
+            self.prepareGeometryChange()
+            (dx,dy) = self.delta[i]
+            self.points[i] = [mousePos.x()+dx,mousePos.y()+dy]
+            self.updateHandlesPos()
+        else:
+            self.prepareGeometryChange() # важная штука
+            self.points = [[mousePos.x()+dx,mousePos.y()+dy] for dx,dy in self.delta]
+            self.updateHandlesPos()
 
     def BoundingPoligon(self,line):
         """ Возращает полигон, ограничивающий фигуру """
@@ -454,6 +709,9 @@ class GraphicsPolylineItem(QGraphicsItem):
         self.updateHandlesPos()
         self.update()
 
+        """ if self.calc_func is not None:
+            self.calc_func("receiver") """
+
 
     def setColorObject(self,pen=None,brush=None):
         """ Изменение цвета обьекта """
@@ -462,9 +720,7 @@ class GraphicsPolylineItem(QGraphicsItem):
         self.update()
 
     def mouseDoubleClickEvent(self, mouseEvent):
-        self.menu.show()
-
-    
+        self.menu.show()   
 
 class GraphicsCircleItem(QGraphicsEllipseItem):
     """ Класс реализующий интерактивный объект круг """
@@ -523,6 +779,9 @@ class GraphicsCircleItem(QGraphicsEllipseItem):
         self.menu = Reactor(self.setCrl, self.getPos, self.setPos,data=data)
         self.setCrl()
         self.updateHandlesPos()
+
+    def dragable(self,trig):
+        self.setFlag(QGraphicsItem.ItemIsMovable, trig)
 
     def CalcWhenShow(self):
         if self.calc_func is not None and self.re_calc:
@@ -752,6 +1011,9 @@ class GraphicsCircleItem(QGraphicsEllipseItem):
         self.setRect(r)
         self.updateHandlesPos()
         self.update()
+
+        if self.calc_func is not None:
+            self.calc_func("sourses")
         
 
 class GraphicsRectItem(QGraphicsRectItem):
@@ -813,6 +1075,9 @@ class GraphicsRectItem(QGraphicsRectItem):
         self.menu = CalcAreaH(self.setCrl, self.getPos, self.setPos,data=data)
         self.setCrl()
         self.updateHandlesPos()
+
+    def dragable(self,trig):
+        self.setFlag(QGraphicsItem.ItemIsMovable, trig)
 
     @property
     def handleSize(self):
@@ -1112,6 +1377,9 @@ class OneCalcCircle(QGraphicsEllipseItem):
         self.setCrl()
         self.updateHandlesPos()
 
+    def dragable(self,trig):
+        self.setFlag(QGraphicsItem.ItemIsMovable, trig)
+
         
     def CalcWhenShow(self):
         if self.calc_func is not None and self.re_calc:
@@ -1228,8 +1496,8 @@ class OneCalcCircle(QGraphicsEllipseItem):
         #self.updateHandlesPos()
         self.update()
 
-        if self.func is not None:
-            self.func()
+        if self.calc_func is not None:
+            self.calc_func("areas",data=self.menu.data)
 
 
 

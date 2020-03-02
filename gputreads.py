@@ -309,7 +309,7 @@ class Paralel_Calc():
 
         #Feedback = None
         if Feedback is not None:
-            self.Feedback = [self.call_back(Feedback),Feedback[1]]
+            self.Feedback = [self.call_back(Feedback),Feedback[1],Feedback[2]]
             self.Feedback[1][0](lambda: self.stop())
         else:
             self.Feedback = None
@@ -340,4 +340,6 @@ class Paralel_Calc():
                 gpu = True
             if cpu and gpu:
                 call_func[0]()
+                if call_func[2] is not None:
+                    call_func[2]()
         return Call

@@ -7,13 +7,14 @@ from PyQt5.QtWidgets import QMainWindow, QWidget, QGraphicsScene, QGraphicsView,
      QPushButton, QGridLayout, QApplication, QVBoxLayout, QHBoxLayout, QGraphicsEllipseItem, QGraphicsItem,\
      QGraphicsItemGroup,QGraphicsSceneMouseEvent, QListView, QSplitter, QFrame, QSizePolicy, QTreeView,\
      QHeaderView, QCheckBox, QComboBox, QFileDialog, QTabWidget, QTableWidget, QSpinBox, QLabel, QTableWidgetItem,\
-     QColorDialog, QProgressDialog, QTreeWidget, QTreeWidgetItem, QMessageBox
+     QColorDialog, QProgressDialog, QTreeWidget, QTreeWidgetItem, QMessageBox,QLineEdit, QDoubleSpinBox
 from PyQt5.QtCore import Qt, QPoint, QLineF,QPointF, QEvent, QPersistentModelIndex, QModelIndex
 
-from DrawObjects import GraphicsCircleItem,GraphicsLineItem,GraphicsPolylineItem, GraphicsRectItem, OneCalcCircle
-from ObjectsMenu import DownloadDelegate, Save_Widget, MenuData
+from DrawObjects import GraphicsCircleItem,GraphicsLineItem,GraphicsPolylineItem,\
+     GraphicsRectItem, OneCalcCircle, RecPolylineItem
+from ObjectsMenu import DownloadDelegate, Save_Widget, MenuData, MyValidator
 
-from main_calculate import run_area_calc, setTypes, cuda_available
+from main_calculate import run_area_calc, point_calc, setTypes, cuda_available, receivers_calc
 
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -36,6 +37,7 @@ import sys
 import os
 
 import json
+import pickle
 
 import inspect
 
@@ -50,10 +52,11 @@ class TreeWidgetItem(QTreeWidgetItem):
 
 
 class GraphicsView(QGraphicsView):
-    def __init__(self,SoursesObjectsDict, AreasObjectsDict, ReturnMousePos = None):
+    def __init__(self,SoursesObjectsDict, AreasObjectsDict, ReceiverObjectsDict, ReturnMousePos = None):
         super().__init__()
         self.SoursesObjectsDict = SoursesObjectsDict
         self.AreasObjectsDict = AreasObjectsDict
+        self.ReceiverObjectsDict = ReceiverObjectsDict
         self.ReturnMousePos = ReturnMousePos
         self.current_scale = 1
         self.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
@@ -88,6 +91,11 @@ class GraphicsView(QGraphicsView):
                 if obj.type_link == "object":
                     obj.graphic_item.hndl*=0.8
                     obj.graphic_item.updateHandlesPos() 
+
+            for obj in self.ReceiverObjectsDict.values():
+                if obj.type_link == "object":
+                    obj.graphic_item.hndl*=0.8
+                    obj.graphic_item.updateHandlesPos() 
                     
 
         elif wheelcounter.y()==-120:
@@ -99,6 +107,11 @@ class GraphicsView(QGraphicsView):
                     obj.graphic_item.updateHandlesPos()                   
 
             for obj in self.AreasObjectsDict.values():
+                if obj.type_link == "object":
+                    obj.graphic_item.hndl*=1.25
+                    obj.graphic_item.updateHandlesPos()
+
+            for obj in self.ReceiverObjectsDict.values():
                 if obj.type_link == "object":
                     obj.graphic_item.hndl*=1.25
                     obj.graphic_item.updateHandlesPos()
@@ -182,7 +195,11 @@ class GraphicsView(QGraphicsView):
 class GraphicsScene(QGraphicsScene):
     def __init__(self, parent=None):
         QGraphicsScene.__init__(self, parent)
-        
+
+    def dragable(self,trig):
+        for i in self.items():
+            i.dragable(trig)
+
         
 # subclass
 class CheckableComboBox(QComboBox):
@@ -286,6 +303,21 @@ class Screen(QMainWindow):
         except Exception:
             self.path_home = ""
 
+        for curren_dir in ["Cashe_files"]:
+            if os.path.exists(curren_dir):
+                if os.path.isdir(curren_dir):
+                    print(curren_dir+" is here")
+                else:
+                    try:
+                        os.mkdir(curren_dir)
+                    except OSError:
+                        print ("Error generate dir "+curren_dir)
+            else:
+                try:
+                    os.mkdir(curren_dir)
+                except OSError:
+                    print ("Error generate dir "+curren_dir)
+
         self.setWindowTitle('MFC')
         self.setWindowIcon(QIcon("images/icon.png"))
 
@@ -293,18 +325,18 @@ class Screen(QMainWindow):
         LeftPanelFrame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         #LeftPanelFrame.setMinimumSize(QSize(0, 100))
 
-
         # Treewidgets for all user objects
         self.SoursesObjectsTree = QTreeWidget()
         self.AreasObjectsTree = QTreeWidget()
         self.ReceiverObjectsTree = QTreeWidget()
 
-        
         """ self.SoursesObjectsTree.itemClicked.connect(lambda a,b:print("Click",a,b))
         self.SoursesObjectsTree.itemActivated.connect(lambda a,b:print("Activated",a,b))
         self.SoursesObjectsTree.itemChanged.connect(lambda a,b:print("Changed",a,b))
         self.SoursesObjectsTree.itemPressed.connect(lambda a,b:print("Pressed",a,b))
         self.SoursesObjectsTree.itemDoubleClicked.connect(lambda a,b:print("DoubleClicked",a,b)) """
+
+        self.pcalc = False
 
         self.SoursesObjectsTree.setColumnCount(2)
         self.SoursesObjectsTree.setHeaderLabels(["","Источники"])
@@ -324,9 +356,10 @@ class Screen(QMainWindow):
         self.AreasObjectsTree.itemChanged.connect(lambda a,b:self.ChangeCheckBox(a,b,"areas"))
         self.AreasObjectsTree.itemActivated.connect(lambda a,b:self.OpenObjMenu(a,b,"areas"))
 
-        
-        #self.SoursesObjectsTree.setEditTriggers(QTreeWidget.DoubleClicked | QTreeWidget.SelectedClicked | QTreeWidget.EditKeyPressed)
+        self.ReceiverObjectsTree.itemChanged.connect(lambda a,b:self.ChangeCheckBox(a,b,"receivers"))
+        self.ReceiverObjectsTree.itemActivated.connect(lambda a,b:self.OpenObjMenu(a,b,"receivers"))
 
+        #self.SoursesObjectsTree.setEditTriggers(QTreeWidget.DoubleClicked | QTreeWidget.SelectedClicked | QTreeWidget.EditKeyPressed)
 
         # Dictionaries for all user objects
         self.SoursesObjectsDict = {}
@@ -336,27 +369,43 @@ class Screen(QMainWindow):
         self.SoursesObjectsChildren = {}
         self.AreasObjectsChildren = {}
         self.ReceiverObjectsChildren = {}
-
-        
+ 
         ListObjectsHeader = QHeaderView(Qt.Horizontal)
 
-        #self.calcObjects.doubleClicked.connect(self.OpenCalcMenu)
-        #self.calcObjects.clicked[QModelIndex].connect(self.SelectCalc)
+        da = QLabel("𝑑𝛼, \u00B0:")
+        da.setStyleSheet("font: 10pt;")
+        dl = QLabel("𝑑𝑙, м:")
+        dl.setStyleSheet("font: 10pt;")
 
+        self.da = QDoubleSpinBox()
+        self.da.setRange(0.001,360)
+        self.da.setSingleStep(1)
+        self.da.setValue(1)
+        #self.da.editingFinished.connect()
+
+        self.dl = QDoubleSpinBox()
+        self.dl.setRange(0.001,99)
+        self.dl.setSingleStep(0.01)
+        self.dl.setValue(0.01)
+        #self.dl.editingFinished.connect()
+
+        calc_setings = QHBoxLayout()
+        calc_setings.addWidget(da)
+        calc_setings.addWidget(self.da)
+        calc_setings.addWidget(dl)
+        calc_setings.addWidget(self.dl)
 
         # Left pannel with treewidges
         BoxLayout2 = QHBoxLayout()
         BoxLayout2_1 = QVBoxLayout()
         BoxLayout2_1.addWidget(self.SoursesObjectsTree)
+        BoxLayout2_1.addLayout(calc_setings)
         BoxLayout2_1.addWidget(self.AreasObjectsTree)
         BoxLayout2_1.addWidget(self.ReceiverObjectsTree)
-
 
         BoxLayout2.addLayout(BoxLayout2_1)
         LeftPanelFrame.setLayout(BoxLayout2) 
 
-
-        
         SceneFrame = QFrame() 
         SceneFrame.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding) 
         #SceneFrame.setMinimumSize(QSize(0, 100))
@@ -381,14 +430,10 @@ class Screen(QMainWindow):
         cords_string = lambda x,y: self.status_string.showMessage(f"x: {x}, y: {y}")
 
         self.scene = GraphicsScene() #QGraphicsScene()
-        self.view = GraphicsView(self.SoursesObjectsDict, self.AreasObjectsDict, cords_string)
+        self.view = GraphicsView(self.SoursesObjectsDict, self.AreasObjectsDict, self.ReceiverObjectsDict, cords_string)
         self.view.setMouseTracking(True)
- 
-
         self.view.setAlignment( Qt.AlignLeft | Qt.AlignTop )
- 
         self.view.setScene(self.scene)
-
         self.view.current_scale = 1
 
         self.tab = QTabWidget()
@@ -519,6 +564,24 @@ class Screen(QMainWindow):
         AreaMenu.addAction(DelCalcAction)
 
 
+        ReceiverMenu = menubar.addMenu('&Приёмники')
+
+        NewLayerAction_3 = QAction('Добавить слой', self)
+        #NewLayerAction_3.setShortcut('Ctrl+R')
+        NewLayerAction_3.triggered.connect(lambda:self.AddObj("receivers","layer")) 
+        ReceiverMenu.addAction(NewLayerAction_3)
+
+        NewRecconductorAction = QAction('Добавить проводник', self)
+        #NewRecconductorAction.setShortcut('Ctrl+R')
+        NewRecconductorAction.triggered.connect(lambda:self.AddObj("receivers","recconductor"))
+        ReceiverMenu.addAction(NewRecconductorAction)
+
+        DelObjectAction = QAction('Удалить', self)
+        #DelObjectAction.setShortcut('Ctrl+D')
+        DelObjectAction.triggered.connect(lambda:self.DelObj("receivers")) 
+        ReceiverMenu.addAction(DelObjectAction)
+
+
         ResultMenu = menubar.addMenu('&Результаты')
 
         SaveInDXFAction = QAction('Сохранить в dxf', self)
@@ -531,10 +594,15 @@ class Screen(QMainWindow):
         SavePlotAction.triggered.connect(self.SavePlot) 
         ResultMenu.addAction(SavePlotAction)
 
-        RunCalcAction = QAction('Расчёт', self)
-        RunCalcAction.setShortcut('Ctrl+R')
+        RunCalcAction = QAction('Расчёт магнитного поля', self)
+        #RunCalcAction.setShortcut('Ctrl+R')
         RunCalcAction.triggered.connect(self.Run_area) 
         ResultMenu.addAction(RunCalcAction)
+
+        RecCurCalcAction = QAction('Расчёт тока в приёмниках', self)
+        #RecCurCalcAction.setShortcut('Ctrl+R')
+        RecCurCalcAction.triggered.connect(self.RecCalc) 
+        ResultMenu.addAction(RecCurCalcAction)
 
 
         settingsMenu = menubar.addMenu('&Настройки')
@@ -550,10 +618,22 @@ class Screen(QMainWindow):
         fl64.setCheckable(True)
         FloatTypeGroup.addAction(fl32)
         FloatTypeGroup.addAction(fl64)
-        FloatTypeGroup.triggered.connect(lambda x:setTypes(x.text()))     
+        FloatTypeGroup.triggered.connect(lambda x:setTypes(x.text()))
 
+        sep1 = QAction('', self) 
+        sep1.setSeparator(True)
+
+        dragable = QAction('Передвигаемость', self) 
+        dragable.setCheckable(True)
+        self.drag_state = True
+        dragable.setChecked(True)
+        dragable.triggered.connect(self.DragObj)
+
+        
         settingsMenu.addAction(fl32)
         settingsMenu.addAction(fl64)
+        settingsMenu.addAction(sep1)
+        settingsMenu.addAction(dragable)
 
         Splitter1 = QSplitter(Qt.Horizontal) 
         Splitter1.addWidget(LeftPanelFrame)
@@ -567,6 +647,30 @@ class Screen(QMainWindow):
         self.central_widget.setLayout(vbox)
         self.setCentralWidget(self.central_widget) 
 
+        # Dict for using cashe of calculate
+        try:
+            with open('Cashe_files/cahse.pkl', "rb" ) as f:
+                self.Cashe  = pickle.load(f)
+        except Exception:
+            self.Cashe = {}
+
+    def DragObj(self,state):
+        self.drag_state = state
+        self.scene.dragable(state)
+
+    def closeEvent(self, event):
+        Message = QMessageBox(QMessageBox.Question,  'Выход из программы',
+            "Вы дейстивлеьно хотите выйти?", parent=self)
+        Message.addButton('Да', QMessageBox.YesRole)
+        Message.addButton('Нет', QMessageBox.NoRole)
+        #Message.addButton('Сохранить', QMessageBox.ActionRole)
+        reply = Message.exec()
+        if reply == 0:
+            with open('Cashe_files/cahse.pkl', "wb" ) as f:
+                pickle.dump(self.Cashe,f)
+            event.accept()
+        elif reply == 1:
+            event.ignore()
 
     def on_mouse_move(self,click):
         x, y = click.xdata, click.ydata
@@ -583,34 +687,7 @@ class Screen(QMainWindow):
             self.fig.savefig(fname[0], format=fname[1][2:], dpi=300) # Cохраняем графики
         except Exception as ex:
             print(ex)
-
-
-    def SaveInDXFstart(self):
-        sp = []
-        for j,i in self.calcObjectsDict.items():
-            if i[0]=="name":
-                if i[3].menu.data["obj_type"] != "V_calc_area":
-                    sp.append([j,i[3].menu.data["name"],i[3].menu.data["obj_type"]])
-
-
-        self.w = Save_Widget(sp,lambda a,b:self.SaveInDXFfinish(a,b))
-        self.w.show()
-        
-
-
-    def SaveInDXFfinish(self,sp,tsf):
-        
-        fname = QFileDialog.getSaveFileName(self, 'Сохранить файл', self.path_home,'*.dxf')[0]
-        
-        #print(sp)
-        #print(tsf)
-
-        self.Run_calc_area(tc=1,dnn=sp,fname=(fname,tsf))
-        
-
-                    
-
-
+      
     def SetColorTContour(self,row,col):
         if col == 2:
             color = QColorDialog.getColor(initial=self.table_contour.item(row,col).background().color(),\
@@ -705,18 +782,28 @@ class Screen(QMainWindow):
         except Exception as ex:
             print(ex)
 
-    def ShowCanvas(self,SpaceCord,H_area,area, tc=None):
+    def ShowCanvas(self,SpaceCord,H_area,area, cashe=None, sp_levels=None, gen=None):
         try:
-            self.Ind.setLabelText("Создаётся график")
-            self.Ind.reset()
-            tp, area_calc, z = area[:3]
+            if cashe is not None:
+                numb = len(self.Cashe)+1
+                self.Cashe[cashe] = numb
+                np.save(f'Cashe_files/XYZ_{numb}.npy',SpaceCord)
+                np.save(f'Cashe_files/H_{numb}.npy',H_area)
 
+            if sp_levels is None:
+                self.Ind.setLabelText("Создаётся график")
+                self.Ind.reset()
+            else:
+                self.Ind.setLabelText("Создаются линии уровня")
+
+            tp, area_calc, z = area[:3]
+            print(np.shape(H_area))
             H_area = np.linalg.norm(H_area,axis=1)
             self.fig.clear()
-            sp_levels = []
+            #sp_levels = []
         
             if tp == "horizontal_area":
-                X,Y = SpaceCord
+                X,Y = SpaceCord[0,:],SpaceCord[1,:]
 
                 xi, yi = np.linspace(X.min(), X.max(), 100), np.linspace(Y.min(), Y.max(), 100)
                 xi, yi = np.meshgrid(xi, yi)
@@ -732,30 +819,35 @@ class Screen(QMainWindow):
                 cl.set_label('H, А/м',verticalalignment = "top", x=-20) #, rotation=270 #,position=(20,0)
 
                 self.make_contur = lambda l, c: ax.contour(xi, yi, zi, levels = l, colors = c )
-
+                sp = []
                 for k in self.d_contur:
                     self.d_contur[k][1]=None
-                    if tc is None:
+                    if sp_levels is None:
                         self.SetCountur(k,0)
-                    elif tc == 1:
-                        sp_levels += self.SetCountur(k,0,tc=tc)
-
+                    else:
+                        sp+=self.SetCountur(k,0,tc=1)
+                        
+                        #print(len(sp_levels))
+                if sp_levels is not None:       
+                    sp_levels.append(sp)
                 
                 
                 ax.set_xlabel(u'X, м') # Подпись оси х ,fontsize=self.shr_gr
                 ax.set_ylabel(u'Y, м') # Подпись оси у ,fontsize=self.shr_gr
                 #ax.set_title("Тест\n") #,fontsize=self.shr_gr
 
-                if tc is None:
+                if sp_levels is None:
                     self.Canv.draw() # Выводим график в виджет
                     self.tab.setCurrentIndex(1) # Делаем активной созданую закладку
+                elif sp_levels is not None and gen is not None:
+                    gen()
 
-                elif tc == 1:
-                    return sp_levels
+                """ elif tc == 1:
+                    return sp_levels """
 
             
-            elif tp == "vertical_area" and tc is None:
-                X,Y,Z = SpaceCord
+            elif tp == "vertical_area" and sp_levels is None:
+                X,Y,Z = SpaceCord[0,:],SpaceCord[1,:],SpaceCord[2,:]
 
                 if area_calc[2]-area_calc[0]>=area_calc[3]-area_calc[1]:
                     
@@ -840,15 +932,20 @@ class Screen(QMainWindow):
     def get_object_data(self):
         try:
             lst = []
-            for obj in self.SoursesObjectsDict.values():
-                if obj.type_link=="object":
-                    if obj.type_object == "reactor" and obj.state:
-                        lst.append(obj.graphic_item.menu.data.read_data())
-                        
-                    elif obj.type_object == "conductor" and obj.state:
-                        lst.append(obj.graphic_item.menu.data.read_data())
+            layers = {}
+            for item, objs in self.SoursesObjectsChildren.items():
+                t = item.text(1)
+                layers[t] = set()
+                for key in objs:
+                    obj = self.SoursesObjectsDict[key]
+                    if obj.type_link=="object" and obj.state:
+                        data = obj.graphic_item.menu.data.read_data()
+                        lst.append(data)
+                        layers[t].add(data)
+                            
 
-            return lst
+            #print(layers)
+            return tuple(sorted(lst)), layers
         except Exception as ex:
             print(ex)
 
@@ -866,133 +963,128 @@ class Screen(QMainWindow):
             return
 
         area = obj.graphic_item.menu.data.read_data()
-        sourses = self.get_object_data()
+        sourses,layers = self.get_object_data()
 
         self.Ind = self.ProgresCalc()
         print("start")
-        run_area_calc(sourses,area, callback_func = (lambda S, H :self.ShowCanvas(S,H,area),self.createSignals()))#self.Ind
+        dl = self.dl.value()
+        da = self.da.value()
+
+        cashe = (sourses,area,dl,da)
+
+        if cashe not in self.Cashe:
+            run_area_calc(sourses,area,da,dl, callback_func = (lambda S, H :self.ShowCanvas(S,H,area,cashe=cashe),self.createSignals(),None))#self.Ind
+        else:
+            numb = self.Cashe[cashe]
+            S = np.load(f'Cashe_files/XYZ_{numb}.npy')
+            H = np.load(f'Cashe_files/H_{numb}.npy')
+            self.ShowCanvas(S,H,area)
+            print("end_cashe")
+
 
     def PointCalc(self, who, data=None):
-        if who == "sourses":
-            sourses = self.get_object_data()
+        try:
+            if who == "sourses":
+                sourses,layers = self.get_object_data()
 
-            points = []
-            for obj in self.AreasObjectsDict.values():
-                if obj.type_link=="object":
-                    if obj.type_object == "one_point" and obj.state:
-                        points.append(obj.graphic_item.menu.data.read_data())
-        
-        elif who == "":
-            sourses = self.get_object_data()
-            points = [data.read_data()]
+                points = []
+                for obj in self.AreasObjectsDict.values():
+                    if obj.type_link=="object":
+                        if obj.type_object == "one_point" and obj.state:
+                            points.append(obj.graphic_item.menu.data)
 
-        print("end_move")
-        
-
-    def Run_calc_area(self, tc=None, dnn=None,fname=None):
-        lst = []
-
-        for obj in self.SoursesObjectsDict.values():
-            if obj.type_link=="object":
-                if obj.type_object == "reactor" and obj.state:
-                    obj.graphic_item.menu.InitCords()
-                    lst.append(obj.graphic_item.menu.data)
-                    
-                elif obj.type_object == "conductor" and obj.state:
-                    obj.graphic_item.menu.InitCords()
-                    lst.append(obj.graphic_item.menu.data)
-
-        
-        """ try:
+                point_calc(sourses,points, self.da.value(), self.dl.value())
             
+            elif who == "areas":
+                sourses,layers = self.get_object_data()
+                points = [data]
+
+                point_calc(sourses,points, self.da.value(), self.dl.value())
+
+        except Exception:
+            pass
+
+        #print("end_move")
+
+
+    def RecCalc(self):
+        try:
             
-        self.type_link = type_link
-        self.type_object = type_object
-        self.graphic_item = graphic_item
-        self.movable = movable
-        self.state = state
+            receivers = []
+            for key, val in self.ReceiverObjectsDict.items():
+                if key.checkState(0) == Qt.Checked and val.type_link == "object":
+                    receivers.append(val.graphic_item.menu.data.read_data())
 
+            sourses = self.get_object_data()[0]
 
-            if tc is None:
-                for j,i in self.calcObjectsDict.items():
-                    if i[0]=="name":
-                        if i[4]:
-                            if i[3].menu.data["obj_type"] == "H_calc_area":
-                                cord = i[3].getPos()
-                                area_calc = [cord[0]/1000,-cord[3]/1000,cord[2]/1000,-cord[1]/1000]
-                                dg = float(i[3].menu.data["dg"])
-                                dl = float(i[3].menu.data["dl"])
-                                da = float(i[3].menu.data["da"])
-                                z = (float(i[3].menu.data["Z"]),)
-                                tp = "H_calc_area"
-                                break
-                            elif i[3].menu.data["obj_type"] == "V_calc_area":
-                                cord = i[3].getPos()
-                                area_calc = [cord[0]/1000,-cord[3]/1000,cord[2]/1000,-cord[1]/1000]
-                                dg = float(i[3].menu.data["dg"])
-                                dl = float(i[3].menu.data["dl"])
-                                da = float(i[3].menu.data["da"])
-                                z = (float(i[3].menu.data["Z1"]),float(i[3].menu.data["Z2"]))
-                                tp = "V_calc_area"
-                                break
+            dl = self.dl.value()
+            da = self.da.value()
+            
+            receivers_calc(sourses, receivers, dl, da)
 
-                            elif i[3].menu.data["obj_type"] == "O_calc_point":
-                                cord = i[3].getPos()
-                                area_calc = [cord[0]/1000,-cord[1]/1000]
-                                dg = 0.5
-                                dl = float(i[3].menu.data["dl"])
-                                da = float(i[3].menu.data["da"])
-                                z = (float(i[3].menu.data["Z"]),)
-                                tp = "O_calc_point"
-                                break
-
-                
-
-                if (tp == "H_calc_area" or tp == "V_calc_area") and tc is None:
-                    self.Ind = self.ProgresCalc()
-                    run_area_calc(tp,lst,area_calc,z,dg,dl,da, callback_func = (lambda S, H :self.ShowCanvas(S,H,area_calc,z,tp),self.Ind))
-                    
-                
-                elif tp == "O_calc_point" and tc is None:
-                    self.calcObjectsDict[j][3].menu.data["result"] = run_area_calc(tp,lst,area_calc,z,dg,dl,da)
-                    self.scene.update()
-
-            elif tc==1:
-                CalcDict = {i : self.calcObjectsDict[i] for i in dnn}
-                sp_points = []
-                sp_levels = []
-                for j,i in CalcDict.items():
-                    if i[0]=="name":
-                        if i[3].menu.data["obj_type"] == "H_calc_area":
-                            cord = i[3].getPos()
-                            area_calc = [cord[0]/1000,-cord[3]/1000,cord[2]/1000,-cord[1]/1000]
-                            dg = float(i[3].menu.data["dg"])
-                            dl = float(i[3].menu.data["dl"])
-                            da = float(i[3].menu.data["da"])
-                            z = (float(i[3].menu.data["Z"]),)
-                            tp = "H_calc_area"
-                            
-                            SpaceCord, H_area = run_area_calc(tp,lst,area_calc,z,dg,dl,da)
-                            sp_levels += self.ShowCanvas(SpaceCord,H_area,area_calc,z,tp,tc=1)
-
-                        elif i[3].menu.data["obj_type"] == "O_calc_point":
-                            cord = i[3].getPos()
-                            area_calc = [cord[0]/1000,-cord[1]/1000]
-                            dg = 0.5
-                            dl = float(i[3].menu.data["dl"])
-                            da = float(i[3].menu.data["da"])
-                            z = (float(i[3].menu.data["Z"]),)
-                            tp = "O_calc_point"
-
-                            rez = run_area_calc(tp,lst,area_calc,z,dg,dl,da) + ' А/м'
-
-                            sp_points.append([cord[0],-cord[1], rez])
-
-                dxf.SaveInDXF(sp_points,sp_levels,sp_obj,fname)
-
+            print("RecCalc")
         except Exception as ex:
-            print('aaaaa',ex) """
+            print(ex, "RecCalc")
+    
 
+    def SaveInDXFstart(self):
+        try:
+            self.w = Save_Widget(self.AreasObjectsDict,self.AreasObjectsChildren,self.SaveInDXFfinish)
+            self.w.show()
+        except Exception as ex:
+            print(ex)
+
+    
+    def SaveInDXFfinish(self,areas,area_layers,tsf):
+        try:
+            fname = QFileDialog.getSaveFileName(self, 'Сохранить файл', self.path_home,'*.dxf')[0]
+            sourses,sourses_layers = self.get_object_data()
+            self.Ind = self.ProgresCalc()
+
+            dl = self.dl.value()
+            da = self.da.value()
+
+            h_areas = [i for i in areas if i[0] == "horizontal_area"]
+            lvr_levels = [area_layers[i] for i in areas if i[0] == "horizontal_area"]
+
+
+            p_areas = [i for i in areas if i[0] == "one_point"]
+            lvr_points = [area_layers[i] for i in areas if i[0] == "one_point"]
+
+            sp_points = point_calc(sourses, p_areas, da, dl, dxf=True)
+            
+
+            self.sp_levels = []
+            f_l = []
+            for area in h_areas:
+                cashe = (sourses,area,dl,da)
+                if area[0] == "horizontal_area":
+                    if cashe not in self.Cashe:
+                        f = (lambda s,a,da,dl,ch,lv,sg,ordr: (lambda :run_area_calc(s,a,da,dl,\
+                            callback_func = (lambda S, H :self.ShowCanvas(S,H,a,\
+                            cashe=ch,sp_levels=lv),sg,ordr))))(sourses,area,da,dl,cashe,self.sp_levels,self.createSignals(),self.CalcOrder)
+                        f_l.append(f)
+                    else:
+                        numb = self.Cashe[cashe]
+                        S = np.load(f'Cashe_files/XYZ_{numb}.npy')
+                        H = np.load(f'Cashe_files/H_{numb}.npy')
+                        f = (lambda s,h,a,lv,ordr: lambda: (self.ShowCanvas(s,h,a,sp_levels=lv,gen=ordr)))(S,H,area,self.sp_levels,self.CalcOrder)
+                        f_l.append(f)
+                    print("yes")
+            def end(a,b,c,d,e):
+                dxf.SaveInDXF(a,b,c,d)
+                e.reset()
+            #f = lambda: dxf.SaveInDXF(sp_points,self.sp_levels,sourses,(fname,tsf))
+            f = lambda: end((lvr_points,sp_points),(lvr_levels,self.sp_levels),sourses_layers,(fname,tsf),self.Ind)
+            f_l.append(f)
+            self.gen = (i for i in f_l)
+            self.CalcOrder()
+        except Exception as ex:
+            print('aaaaa',ex)
+
+    def CalcOrder(self):
+        next(self.gen)()
+       
             
     def ChangeCheckBox(self,item,colum,type_tree):
         """ Check state control """
@@ -1034,6 +1126,25 @@ class Screen(QMainWindow):
                         else:
                             for child in self.AreasObjectsChildren[item]:
                                 child.setCheckState(0, Qt.Unchecked)
+
+            elif type_tree == "receivers":
+                if colum == 0:
+                    t = self.ReceiverObjectsDict[item].type_link
+                    state = item.checkState(0)
+                    if t == "object":
+                        if state == Qt.Checked:
+                            self.scene.addItem(self.ReceiverObjectsDict[item].graphic_item)
+                            self.ReceiverObjectsDict[item].state = True
+                        else:
+                            self.scene.removeItem(self.ReceiverObjectsDict[item].graphic_item)
+                            self.ReceiverObjectsDict[item].state = False
+                    elif t == "layer":
+                        if state == Qt.Checked:
+                            for child in self.ReceiverObjectsChildren[item]:
+                                child.setCheckState(0, Qt.Checked)
+                        else:
+                            for child in self.ReceiverObjectsChildren[item]:
+                                child.setCheckState(0, Qt.Unchecked)
         except Exception as ex:
             print(ex,"ChangeCheckBox")
                     
@@ -1041,6 +1152,7 @@ class Screen(QMainWindow):
     def OpenObjMenu(self,item,colum,type_tree):
         if type_tree == "sourses": obj = self.SoursesObjectsDict
         elif type_tree == "areas": obj = self.AreasObjectsDict
+        elif type_tree == "receivers": obj = self.ReceiverObjectsDict
 
         if obj[item].type_link == "object" and colum == 1:
             obj[item].graphic_item.menu.show()
@@ -1055,6 +1167,10 @@ class Screen(QMainWindow):
             elif type_tree == "areas": 
                 tree, link = self.AreasObjectsTree, "images/area.png"
                 ObjDict, ObjChildren = self.AreasObjectsDict, self.AreasObjectsChildren
+            elif type_tree == "receivers": 
+                tree, link = self.ReceiverObjectsTree, "images/receiver.png"
+                ObjDict, ObjChildren = self.ReceiverObjectsDict, self.ReceiverObjectsChildren
+
 
             item = tree.selectedItems()
             if type_obj =="layer" : item = None
@@ -1078,10 +1194,10 @@ class Screen(QMainWindow):
                 if ObjDict[item].type_link != "layer": item = item.parent()
 
                 if type_obj == "reactor": 
-                    DrawObj = GraphicsCircleItem((cx,cy,wd),calc_func=self.PointCalc)
+                    DrawObj = GraphicsCircleItem((cx,cy,wd),calc_func=self.PointCalc if self.pcalc else None)
                     link_obj = "images/reactor.png"
                 elif type_obj == "conductor": 
-                    DrawObj = GraphicsPolylineItem([[cx-wd,cy-hg],[cx+wd,cy+hg]],calc_func=self.PointCalc)
+                    DrawObj = GraphicsPolylineItem([[cx-wd,cy-hg],[cx+wd,cy+hg]],calc_func=self.PointCalc if self.pcalc else None)
                     link_obj = "images/conductor.png"
                 elif type_obj == "horizontal_area": 
                     DrawObj = GraphicsRectItem((cx-wd,cy-hg,cx+wd,cy+hg))
@@ -1090,8 +1206,11 @@ class Screen(QMainWindow):
                     DrawObj = GraphicsLineItem((cx-wd,cy-hg,cx+wd,cy+hg))
                     link_obj = "images/line.png" 
                 elif type_obj == "one_point": 
-                    DrawObj = OneCalcCircle((cx,cy), calc_func=self.PointCalc)
+                    DrawObj = OneCalcCircle((cx,cy), calc_func=self.PointCalc if self.pcalc else None)
                     link_obj = "images/point.png"
+                elif type_obj == "recconductor": 
+                    DrawObj = RecPolylineItem([[cx-wd,cy-hg],[cx+wd,cy+hg]])
+                    link_obj = "images/conductor.png"
 
                 child = TreeWidgetItem(["","new_obj"])
                 child.setFlags(child.flags() | Qt.ItemIsUserCheckable)
@@ -1101,6 +1220,7 @@ class Screen(QMainWindow):
 
                 DrawObj.hndl*=1/self.view.current_scale  
                 DrawObj.updateHandlesPos()
+                DrawObj.dragable(self.drag_state)
                 DrawObj.menu.data.name = "new_obj"
                 DrawObj.menu.setListName = self.Callbackname(child,DrawObj)
 
@@ -1137,6 +1257,18 @@ class Screen(QMainWindow):
                     message_text = f'Вы действительно желаете удалить из "областей" cлой "{item.text(1)}" со всеми его объектами?'
                 elif ObjDict[item].type_link == "object":
                     message_text = f'Вы действительно желаете удалить из "областей" объект "{item.text(1)}"?'
+
+            elif type_tree == "receivers": 
+                tree = self.ReceiverObjectsTree
+                ObjDict, ObjChildren = self.ReceiverObjectsDict, self.ReceiverObjectsChildren
+                item = tree.selectedItems()
+                if len(item)>1: return
+                else: item = item[0]
+
+                if ObjDict[item].type_link == "layer":
+                    message_text = f'Вы действительно желаете удалить из "приёмников" cлой "{item.text(1)}" со всеми его объектами?'
+                elif ObjDict[item].type_link == "object":
+                    message_text = f'Вы действительно желаете удалить из "приёмников" объект "{item.text(1)}"?'
 
             Message = QMessageBox(QMessageBox.Question,  'Удаление',
                 message_text, parent = self)
@@ -1211,12 +1343,16 @@ class Screen(QMainWindow):
         wV = self.view.size().width()
         hV = self.view.size().height()
 
-        sourses, areas = data["Sourses"], data["Areas"]
+        sourses, areas, receivers, settings = data["Sourses"], data["Areas"], data.get("Receivers",[]), data["Settings"]
         xmin, ymin, xmax, ymax  = float("inf"), float("inf"), -float("inf"), -float("inf") 
         fc = lambda a,b: (min(a[0],b[0]),min(a[1],b[1]),max(a[2],b[2]),max(a[3],b[3]))
 
+        self.dl.setValue(settings.get("dl",0.01))
+        self.da.setValue(settings.get("da",1))
+
         Sourses = []
         Areas = []
+        Receivers = []
 
         for name_lv, obj in sourses:
             l = [name_lv, []]
@@ -1256,8 +1392,20 @@ class Screen(QMainWindow):
             Areas.append(l)
 
 
+        for name_lv, obj in receivers:
+            l = [name_lv, []]
+            for data in obj:
+                data_obj = MenuData(init_data=data)
+                if data_obj.type_object == "recconductor":
+                    cord = [[x, -y] for x, y in data_obj.tbl_XY.number_gui]
+                    l[1].append([data_obj.name,data_obj.type_object,cord,data_obj])
+                    xmin, ymin, xmax, ymax = fc(data_obj.borders(),(xmin, ymin, xmax, ymax))
+
+            Receivers.append(l)
+
+
         scl_layers = min(wV/(xmax-xmin),hV/(ymax-ymin)) if xmax>-float("inf") and xmin<float("inf") and ymax>-float("inf") and ymin<float("inf") else 1
-        self.LoadData(Sourses, Areas, scl_layers)            
+        self.LoadData(Sourses, Areas, Receivers, scl_layers)            
            
         self.view.current_scale = scl_layers
         self.view.scale(scl_layers,scl_layers)
@@ -1284,6 +1432,7 @@ class Screen(QMainWindow):
 
         layers = dxf.OpenFile(fname)
 
+
         wV = self.view.size().width()
         hV = self.view.size().height()
 
@@ -1292,6 +1441,8 @@ class Screen(QMainWindow):
          
         Sourses = []
         Areas = []
+        Receivers = []
+
         for layer in layers:
             
             x1,y1,x2,y2 = layers[layer]["size"]
@@ -1305,7 +1456,7 @@ class Screen(QMainWindow):
                     l[1].append([name_obj,"conductor",layers[layer]["lwpolyline"][name_obj],None])
                 Sourses.append(l)
 
-            if layers[layer]["type"] == 'areas':
+            elif layers[layer]["type"] == 'areas':
                 l = [layers[layer]["name"],[]]
                 for name_obj in layers[layer]["rectangle"]:
                     l[1].append([name_obj,"horizontal_area",layers[layer]["rectangle"][name_obj],None])
@@ -1315,8 +1466,16 @@ class Screen(QMainWindow):
                     l[1].append([name_obj,"one_point",layers[layer]["point"][name_obj],None])
                 Areas.append(l)
 
+            elif layers[layer]["type"] == 'receivers':
+                l = [layers[layer]["name"],[]]
+                for name_obj in layers[layer]["lwpolyline"]:
+                    l[1].append([name_obj,"recconductor",layers[layer]["lwpolyline"][name_obj],None])
+                Receivers.append(l)
+
+
         scl_layers = min(wV/(xmax-xmin),hV/(ymax-ymin)) if xmax>-float("inf") and xmin<float("inf") and ymax>-float("inf") and ymin<float("inf") else 1
-        self.LoadData(Sourses, Areas, scl_layers)            
+
+        self.LoadData(Sourses, Areas, Receivers, scl_layers)            
 
         self.view.current_scale = scl_layers  
         self.view.scale(scl_layers,scl_layers)
@@ -1326,7 +1485,7 @@ class Screen(QMainWindow):
         # Unblock signals for all metods
         self.BlockSignals(False)
 
-    def LoadData(self, Sourses, Areas, scl_layers):
+    def LoadData(self, Sourses, Areas, Receivers, scl_layers):
         for name_lv, obj in Sourses:
             parent = TreeWidgetItem(self.SoursesObjectsTree, ["",name_lv])
             parent.setFlags(parent.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEditable)
@@ -1344,9 +1503,10 @@ class Screen(QMainWindow):
                     child.setIcon(1,QIcon("images/reactor.png"))
                     parent.addChild(child)
 
-                    Circle = GraphicsCircleItem((cord[0][0],-cord[0][1],cord[1]),data=data,calc_func=self.PointCalc)
+                    Circle = GraphicsCircleItem((cord[0][0],-cord[0][1],cord[1]),data=data,calc_func=self.PointCalc if self.pcalc else None)
                     Circle.hndl*=1/scl_layers  
                     Circle.updateHandlesPos()
+                    Circle.dragable(self.drag_state)
                     Circle.menu.data.name = name_obj
                     Circle.menu.setListName = self.Callbackname(child,Circle)
 
@@ -1360,9 +1520,10 @@ class Screen(QMainWindow):
                     child.setIcon(1,QIcon("images/conductor.png"))
                     parent.addChild(child)
 
-                    Polyline = GraphicsPolylineItem([[xy[0], -xy[1]] for xy in cord],data=data,calc_func=self.PointCalc)
+                    Polyline = GraphicsPolylineItem([[xy[0], -xy[1]] for xy in cord],data=data,calc_func=self.PointCalc if self.pcalc else None)
                     Polyline.hndl*=1/scl_layers  
                     Polyline.updateHandlesPos()
+                    Polyline.dragable(self.drag_state)
                     Polyline.menu.data.name = name_obj
                     Polyline.menu.setListName = self.Callbackname(child,Polyline)
 
@@ -1391,6 +1552,7 @@ class Screen(QMainWindow):
                     CalcArea.menu.data.name = name_obj
                     CalcArea.hndl*=1/scl_layers 
                     CalcArea.updateHandlesPos()
+                    CalcArea.dragable(self.drag_state)
                     CalcArea.menu.setListName = self.Callbackname(child,CalcArea)
 
                     self.AreasObjectsDict[child] = Atributs(type_link="object",type_object=tp,graphic_item=CalcArea)    
@@ -1406,7 +1568,8 @@ class Screen(QMainWindow):
                     CalcArea = GraphicsLineItem((cord[0],-cord[1],cord[2],-cord[3]),data=data)
                     CalcArea.menu.data.name = name_obj   
                     CalcArea.hndl*=1/scl_layers 
-                    CalcArea.updateHandlesPos() 
+                    CalcArea.updateHandlesPos()
+                    CalcArea.dragable(self.drag_state)
                     CalcArea.menu.setListName = self.Callbackname(child,CalcArea)
 
                     self.AreasObjectsDict[child] = Atributs(type_link="object",type_object="vertical_area",graphic_item=CalcArea)
@@ -1419,14 +1582,46 @@ class Screen(QMainWindow):
                     child.setIcon(1,QIcon("images/point.png"))
                     parent.addChild(child)
                     
-                    CalcArea = OneCalcCircle((cord[0],-cord[1]),data=data,calc_func=self.PointCalc)
+                    CalcArea = OneCalcCircle((cord[0],-cord[1]),data=data,calc_func=self.PointCalc if self.pcalc else None)
                     CalcArea.menu.data.name = name_obj
                     CalcArea.hndl*=1/scl_layers
                     CalcArea.updateHandlesPos()
+                    CalcArea.dragable(self.drag_state)
                     CalcArea.menu.setListName = self.Callbackname(child,CalcArea)
 
                     self.AreasObjectsDict[child] = Atributs(type_link="object",type_object="one_point",graphic_item=CalcArea)
                     self.AreasObjectsChildren[parent].add(child)
+
+        try:
+            for name_lv, obj in Receivers:
+                parent = TreeWidgetItem(self.ReceiverObjectsTree, ["",name_lv])
+                parent.setFlags(parent.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEditable)
+                parent.setCheckState(0, Qt.Unchecked)
+                parent.setIcon(1,QIcon("images/receiver.png"))
+
+                self.ReceiverObjectsDict[parent] = Atributs()
+                self.ReceiverObjectsChildren[parent] = set()
+
+                for name_obj, tp, cord, data in obj:
+                    if tp == "recconductor":
+                        child = TreeWidgetItem(["",name_obj])
+                        child.setFlags(child.flags() | Qt.ItemIsUserCheckable)
+                        child.setCheckState(0, Qt.Unchecked)
+                        child.setIcon(1,QIcon("images/conductor.png"))
+                        parent.addChild(child)
+
+                        Polyline = RecPolylineItem([[xy[0], -xy[1]] for xy in cord],data=data)#,calc_func=self.PointCalc
+                        Polyline.hndl*=1/scl_layers  
+                        Polyline.updateHandlesPos()
+                        Polyline.dragable(self.drag_state)
+                        Polyline.menu.data.name = name_obj
+                        Polyline.menu.setListName = self.Callbackname(child,Polyline)
+
+                        self.ReceiverObjectsDict[child] = Atributs(type_link="object",type_object=tp ,graphic_item=Polyline)  
+                        self.ReceiverObjectsChildren[parent].add(child)
+
+        except Exception as ex:
+            print(ex, "fdfdfdfd")
 
 
     def SaveCalcData(self):
@@ -1437,15 +1632,21 @@ class Screen(QMainWindow):
 
             Sourses = []
             Areas = []
+            Receivers = []
 
             for key,item in self.SoursesObjectsChildren.items():
                 Sourses.append([key.text(1),[self.SoursesObjectsDict[i].graphic_item.menu.data.save() for i in item]]) 
 
             for key,item in self.AreasObjectsChildren.items():
-                Areas.append([key.text(1),[self.AreasObjectsDict[i].graphic_item.menu.data.save() for i in item]]) 
+                Areas.append([key.text(1),[self.AreasObjectsDict[i].graphic_item.menu.data.save() for i in item]])
+
+            for key,item in self.ReceiverObjectsChildren.items():
+                Receivers.append([key.text(1),[self.ReceiverObjectsDict[i].graphic_item.menu.data.save() for i in item]])
+
+            settings = {"da":self.da.value(), "dl":self.dl.value()}
   
             with open( fname, "w", encoding="utf8") as f:
-                json.dump({"Sourses":Sourses, "Areas":Areas},f, indent=4)
+                json.dump({"Sourses":Sourses, "Areas":Areas, "Receivers":Receivers, "Settings":settings},f, indent=4)
         except Exception as ex:
             print(ex)
         else:

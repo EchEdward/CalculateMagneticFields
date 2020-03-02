@@ -1,10 +1,11 @@
-from gputreads import Paralel_Calc
+from gputreads import Paralel_Calc, distribution_memory
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable
 import scipy.interpolate
 from scipy.optimize import fsolve,broyden1
+from make_graph import getGraph
 
 from time import time, sleep
 
@@ -413,12 +414,21 @@ def MutualInductTorch(tensor_list):
     Расчёт взаимной индукции между двумя произвольно расположенными проводниками\n
      
     """
-    dl_1, dl_2 = tensor_list[1],tensor_list[3]
-    t_1 = dl_1.size()[0]
-    t_2 = dl_2.size()[0]
-    
-    Cordinates_1 = tensor_list[0][:t_1,:]
-    Cordinates_2 = tensor_list[2][:t_2,:]
+    if tensor_list[3].size()[0]<tensor_list[1].size()[0]:
+        dl_1, dl_2 = tensor_list[1][1:-1,:],tensor_list[3][1:-1,:]
+        t_1 = dl_1.size()[0]
+        t_2 = dl_2.size()[0]
+        
+        Cordinates_1 = tensor_list[0][1:-2:]
+        Cordinates_2 = tensor_list[2][1:-2,:]
+
+    else:
+        dl_1, dl_2 = tensor_list[3][1:-1,:],tensor_list[1][1:-1,:]
+        t_1 = dl_1.size()[0]
+        t_2 = dl_2.size()[0]
+        
+        Cordinates_1 = tensor_list[2][1:-2,:]
+        Cordinates_2 = tensor_list[0][1:-2,:]
 
     M = 0
 
@@ -498,7 +508,8 @@ def provod(xn,yn,zn,xk,yk,zk,t):
 
     return cordinates, dl
 
-def point_calc(sourses,areas):
+def point_calc(sourses,areas, deg, DL, dxf=False):
+    alfs, cordinates, dls,Is = [], [], [], []
     for i in sourses:
         if i[0] == "reactor":
             args, m, alf, I = i[1:]
@@ -508,24 +519,40 @@ def point_calc(sourses,areas):
                 cordinate, dl = Solinoid1Torch(*args,deg)
         elif i[0] == "conductor":
             args, alf, I = i[1:]
-            #print(args, alf, I)
             cordinate, dl = Line(*args, DL=DL)
-            #print(cordinate, dl)
             
         alfs.append(alf)
         cordinates.append(cordinate)
         dls.append(dl)
         Is.append(I)
 
+    if not dxf:
+        for data in areas:
+            r = 0
+            (x, y), z = data.read_data()[1:-1]
+            for j in range(len(alfs)):
+                r += MagnetikVoltageTorch(cordinates,dls,[x],[y],z[0],alfs,Is,numbers_type[0],False,0,j,'cpu')
+
+            data.result.setNumber(np.linalg.norm(r))
+    else:
+        rez = []
+        for data in areas:
+            r = 0
+            (x, y), z = data[1:-1]
+            for j in range(len(alfs)):
+                r += MagnetikVoltageTorch(cordinates,dls,[x],[y],z[0],alfs,Is,numbers_type[0],False,0,j,'cpu')
+
+            rez.append((x,y,z,str(round(np.linalg.norm(r),2))))
+        return rez
+
         
-# def run_area_calc(tp,lst, area, hz, step, DL, deg, callback_func = None):
-def run_area_calc(sourses, area, callback_func = None):
+def run_area_calc(sourses, area, deg, DL, callback_func = None):
     cordinates = []
     dls = []
     alfs = []
     Is = []
 
-    tp, area, hz, deg, DL, step = area
+    tp, area, hz, step = area
 
     try:
         for i in sourses:
@@ -554,23 +581,23 @@ def run_area_calc(sourses, area, callback_func = None):
             row = int((area[3]-area[1])/step)+1
 
             H_area = np.zeros((row*col,3),dtype=numbers_type[2])
-            X = np.zeros(row*col,dtype=numbers_type[1])
-            Y = np.zeros(row*col,dtype=numbers_type[1])
+            XY = np.zeros((2,row*col),dtype=numbers_type[1])
+
                     
             k=0
             for i in range(row):
                 for j in range(col):
-                    X[k] =j*step+area[0]
-                    Y[k] =i*step+area[1]
+                    XY[0][k]=j*step+area[0]
+                    XY[1][k] =i*step+area[1]
                     k+=1
             
-            cb = [lambda: callback_func[0]((X,Y),H_area),callback_func[1]] if callback_func is not None else None
-            PC = Paralel_Calc([cordinates, dls],[X,Y,hz[0],alfs,Is,numbers_type[0],False],k,2.4,H_area, MagnetikVoltageTorch, cb)
+            cb = [lambda: callback_func[0](XY,H_area),callback_func[1],callback_func[2]] if callback_func is not None else None
+            PC = Paralel_Calc([cordinates, dls],[XY[0,:],XY[1,:],hz[0],alfs,Is,numbers_type[0],False],k,2.4,H_area, MagnetikVoltageTorch, cb)
 
             
             if callback_func is None:
                 PC.start(join=True)
-                return (X,Y), H_area
+                return XY, H_area
 
             else:
                 PC.start()
@@ -585,26 +612,24 @@ def run_area_calc(sourses, area, callback_func = None):
             row = int((hz[1]-hz[0])/step)+1
 
             H_area = np.zeros((row*col,3),dtype=numbers_type[2])
-            X = np.zeros(row*col,dtype=numbers_type[1])
-            Y = np.zeros(row*col,dtype=numbers_type[1])
-            Z = np.zeros(row*col,dtype=numbers_type[1])
+            XYZ = np.zeros((3,row*col),dtype=numbers_type[1])
 
         
             k=0
             for i in range(row):
                 for j in range(col):
                     m=step*j/d
-                    X[k] = (area[0]+area[2]*(m/(1-m)))/(1+(m/(1-m))) if (1-m)!= 0 else area[2]
-                    Y[k] = (area[1]+area[3]*(m/(1-m)))/(1+(m/(1-m))) if (1-m)!= 0 else area[3]
-                    Z[k] = i*step+hz[0]
+                    XYZ[0][k]=(area[0]+area[2]*(m/(1-m)))/(1+(m/(1-m))) if (1-m)!= 0 else area[2]
+                    XYZ[1][k] =(area[1]+area[3]*(m/(1-m)))/(1+(m/(1-m))) if (1-m)!= 0 else area[3]
+                    XYZ[2][k] =i*step+hz[0]
                     k+=1
             
-            cb =  [lambda: callback_func[0]((X,Y,Z),H_area),callback_func[1]] if callback_func is not None else None
-            PC = Paralel_Calc([cordinates, dls],[X,Y,Z,alfs,Is,numbers_type[0],True],k,2.4,H_area, MagnetikVoltageTorch, cb)
+            cb =  [lambda: callback_func[0](XYZ,H_area),callback_func[1],callback_func[2]] if callback_func is not None else None
+            PC = Paralel_Calc([cordinates, dls],[XYZ[0,:],XYZ[1,:],XYZ[2,:],alfs,Is,numbers_type[0],True],k,2.4,H_area, MagnetikVoltageTorch, cb)
 
             if callback_func is None:
                 PC.start(join=True)
-                return (X,Y,Z), H_area
+                return XYZ, H_area
 
             else:
                 PC.start()
@@ -619,6 +644,123 @@ def run_area_calc(sourses, area, callback_func = None):
         H_area = np.linalg.norm(H_point)
 
         return str(round(H_area,2)) """
+def receivers_calc(sousces, receivers, DL, da):
+    pls, diam, materials = [],[],[]
+
+    for pl in receivers:
+        pls.append(pl[1][0])
+        diam.append(pl[1][1])
+        materials.append(pl[1][2])
+
+    A0, Lines, R, L = getGraph(pls, diam, materials)
+
+    S_alfs, S_cordinates, S_dls, S_Is = [],[],[],[]
+
+    for i in sousces:
+        if i[0] == "reactor":
+            args, m, alf, I = i[1:]
+            if m == 1:
+                cordinate, dl = SolinoidTorch(*args,da)
+            elif m>1:
+                cordinate, dl = Solinoid1Torch(*args,da)
+        elif i[0] == "conductor":
+            args, alf, I = i[1:]
+            cordinate, dl = Line(*args, DL=DL)
+            
+        S_alfs.append(alf)
+        S_cordinates.append(cordinate)
+        S_dls.append(dl)
+        S_Is.append(I)
+
+    R_cordinates, R_dls = [],[]
+    for i in Lines:
+        cordinate, dl = Line(i, DL=DL)
+        R_cordinates.append(cordinate)
+        R_dls.append(dl)
+    r, s = len(R_dls), len(S_dls)
+    Source_M = np.zeros((r,s),dtype=numbers_type[2])
+    Z = np.zeros((r,r),dtype=numbers_type[2])
+    
+    
+    #free_mmr = distribution_memory([S_cordinates+R_cordinates,S_dls+R_dls],coef=2.3)
+    #print(free_mmr)
+    device = torch.cuda.current_device()
+    S_cordinates = [i.to(device) for i in S_cordinates]
+    R_cordinates = [i.to(device) for i in R_cordinates]
+
+    S_dls = [i.to(device) for i in S_dls]
+    R_dls = [i.to(device) for i in R_dls]
+    #tensors_list_gpu[j][i] = self.tensors_list[j][i].to(device)
+
+    t1 = time()
+    for i in range(r):
+        for j in range(s):
+            Source_M[i][j] = 1j*float(MutualInductTorch([R_cordinates[i],R_dls[i],S_cordinates[j],S_dls[j]]))*2*np.pi*50
+            #print(i,j)
+
+    t2 = time()
+    print(t2-t1)
+    t1 = time()
+    for i in range(r):
+        for j in range(r):
+            if i==j: 
+                Z[i][j] = R[i]+ 1j*L[i]*2*np.pi*50
+            else:
+                gg = MutualInductTorch([R_cordinates[i],R_dls[i],R_cordinates[j],R_dls[j]])
+                #print(gg,i,j)
+                #print(R_cordinates)
+                #print(R_dls)
+                Z[i][j] = 1j*float(gg)*2*np.pi*50
+            #print(i,j)
+
+    t2 = time()
+    print(t2-t1)
+    print("point_1")
+    I = np.array(S_Is,dtype=numbers_type[2])
+    Alf = np.array(S_alfs,dtype=numbers_type[2])
+    E = np.dot(Source_M,I*Alf)
+    print("point_2")
+    dZ = np.diag(np.diagonal(Z))
+    print("point_3")
+    W = Z-dZ
+    print("point_4")
+    A = A0[:-1,:]
+    print("point_5")
+    At = A.transpose()
+    print("point_6")
+    dY=np.linalg.inv(dZ)
+    print("point_7")
+    Yy=np.dot(np.dot(A,dY),At)
+    print("point_8")
+    J=np.dot(np.dot(A,dY),E)
+    print("point_9")
+    #print(np.shape(J),np.shape(E))
+    JE=np.hstack([J, E])
+    print("point_10")
+    KI=np.dot(A,np.dot(W,dY).transpose())
+    print("point_11")
+    YZ=np.vstack([np.hstack([Yy, KI]), np.hstack([At, Z])])
+    print("point_12")
+    H=np.linalg.solve(YZ,JE)
+    print("point_13")
+
+    print(Z)
+
+    for i in range(np.shape(E)[0]):
+        print(abs(E[i]))
+    print("-"*10)
+    for i in range(np.shape(H)[0]):
+        print(abs(H[i]))
+    """ dl_1, dl_2 = tensor_list[1],tensor_list[3]
+    t_1 = dl_1.size()[0]
+    t_2 = dl_2.size()[0]
+    
+    Cordinates_1 = tensor_list[0][:t_1,:]
+    Cordinates_2 = tensor_list[2][:t_2,:] """
+
+    print(A)
+    #pass
+
     
 
 if __name__ == '__main__':

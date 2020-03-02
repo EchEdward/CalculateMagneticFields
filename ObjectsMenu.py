@@ -3,14 +3,18 @@
 #pyi-makespec --onefile --icon=icon.ico --noconsole VEZRead.py
 from PyQt5.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QLabel,QPushButton,\
      QLineEdit, QItemDelegate, QComboBox,QColorDialog, QSpacerItem,QSizePolicy,\
-     QTableWidget, QCheckBox, QGridLayout, QTableWidgetItem, QSpinBox, QListView,\
-     QRadioButton, QButtonGroup
+     QTableWidget, QCheckBox, QGridLayout, QTableWidgetItem, QSpinBox, QTreeWidget,\
+     QTreeWidgetItem, QRadioButton, QButtonGroup
 from PyQt5.QtGui import  QValidator, QColor, QIcon, QStandardItem, QStandardItemModel
 from PyQt5.QtCore import Qt
 
 from main_calculate import SolenParam
 import numpy as np
 
+class TreeWidgetItem(QTreeWidgetItem):
+    def __hash__(self):
+        own_hash = hash(str(self))
+        return own_hash
 
 class MyValidator(QValidator):
     """ Позволяет вводить только числа """
@@ -116,18 +120,21 @@ class DownloadDelegate(QItemDelegate):
                 return lineedit
 
 class Save_Widget(QWidget):
-    def __init__(self, sp, func, parent=None):
+    def __init__(self, obj, children, func, parent=None):
         super(Save_Widget,self).__init__(parent)
 
-        self.sp = sp
         self.func = func
 
         self.setFixedSize(250,300)
 
         self.setWindowTitle("Сохранить")
         
-        self.list = QListView()
-        self.ski = QStandardItemModel()
+        self.list = QTreeWidget()
+        self.list.setColumnCount(2)
+        self.list.setHeaderLabels(["","Области расчета"])
+        self.list.setColumnWidth(0, 60)
+        self.list.itemChanged.connect(self.ChangeCheckBox)
+        
 
         self.radio_button_1 = QRadioButton('В новый файл')
         self.radio_button_1.setChecked(True)
@@ -158,36 +165,86 @@ class Save_Widget(QWidget):
 
         self.setLayout(V_box)
 
-        
-        self.items = []
+        self.obj = {}
+        self.children = {}
+        self.list.blockSignals(True)
 
-        for i in sp:
-            if i[2] == "H_calc_area":
-                it = QStandardItem(QIcon('images/rectangle.png'),i[1])
-                #elif i[2] == "V_calc_area":
-                #it = QStandardItem(QIcon('images/line.jpg'),i[1])
-            elif i[2] == "O_calc_point":
-                it = QStandardItem(QIcon('images/point.jpg'),i[1])
+        for key, value in children.items():
+            parent = TreeWidgetItem(self.list, ["",key.text(1)])
+            parent.setFlags(parent.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEditable)
+            parent.setCheckState(0, Qt.Unchecked)
+            parent.setIcon(1,QIcon("images/area.png"))
 
-            else:
-                continue
+            self.obj[parent] = obj[key]
+            self.children[parent] = set()
 
-            it.setCheckable(True)
-            it.setCheckState(False)
-            
-            self.ski.appendRow(it)
-            self.items.append(it)
-        
-        self.list.setModel(self.ski)
+            for obj_key in value:
+                atr = obj[obj_key]
+                if atr.type_object == "vertical_area": continue
+                child = TreeWidgetItem(["",obj_key.text(1)])
+                child.setFlags(child.flags() | Qt.ItemIsUserCheckable)
+                child.setCheckState(0, Qt.Unchecked)
+                if atr.type_object == "horizontal_area":
+                    child.setIcon(1,QIcon("images/rectangle.png"))
+                elif atr.type_object == "one_point":
+                    child.setIcon(1,QIcon("images/point.png"))
+                
+                """ elif atr.type_object == "vertical_area":
+                    child.setIcon(1,QIcon("images/line.png")) """
 
-        
+                parent.addChild(child)
+
+                self.obj[child] = atr   
+                self.children[parent].add(child)
+
+        self.list.blockSignals(False)
+
+
+    def ChangeCheckBox(self,item,colum):
+        """ Check state control """
+        try:
+            if colum == 0:
+                #print(self.obj[item])
+                t = self.obj[item].type_link
+                state = item.checkState(0)
+                if t == "object":
+                    if state == Qt.Checked:
+                        self.obj[item].state = True
+                    else:
+                        self.obj[item].state = False
+                elif t == "layer":
+                    if state == Qt.Checked:
+                        for child in self.children[item]:
+                            child.setCheckState(0, Qt.Checked)
+                    else:
+                        for child in self.children[item]:
+                            child.setCheckState(0, Qt.Unchecked)
+        except Exception as ex:
+            print(ex,"ChangeCheckBox")           
+
 
     def Return(self):
-        sp = [self.sp[i][0] for i in range(len(self.items)) if self.items[i].checkState() == Qt.Checked]
+        try:
+            areas = []
+            layers = {}
+            for item, objs in self.children.items():
+                t = item.text(1)
+                for key in objs:
+                    obj = self.obj[key]
+                    if obj.type_link=="object" and obj.state:
+                        data = obj.graphic_item.menu.data.read_data()
+                        areas.append(data)
+                        #print(data)
+                        layers[data] = t
+        except Exception as ex:
+            print(ex,"Return")  
+
+
+
+        #areas = [obj.graphic_item.menu.data.read_data() for obj in self.obj.values() if obj.state]
         t = self.button_group.checkedButton().text() == 'В новый файл'
         self.close()
-        
-        self.func(sp,t)
+        self.func(areas,layers,t)
 
 class IntDataPoint:
     def __init__(self, who, atrr=""):
@@ -327,7 +384,6 @@ class TableDataPoint:
 
 class MenuData:
     def __init__(self,type_object=None,init_data={}):
-        #print(init_data)
 
         self._parent = None
 
@@ -350,6 +406,8 @@ class MenuData:
             self.conductor(init_data)
         elif self.type_object == "reactor":
             self.reactor(init_data)
+        elif self.type_object == "recconductor":
+            self.recconductor(init_data)
 
     
     def setParent(self,parent):
@@ -361,8 +419,6 @@ class MenuData:
         self.X = FloatDataPoint(f"Точка {self.name}, X",koef=1000, atrr=d.get("X",""))
         self.Y = FloatDataPoint(f"Точка {self.name}, Y",koef=-1000, atrr=d.get("Y",""))
         self.Z = FloatDataPoint(f"Точка {self.name}, Z", atrr=d.get("Z","1.8"))
-        self.dl = FloatDataPoint(f"Точка {self.name}, dl", atrr=d.get("dl","0.01"))
-        self.da = FloatDataPoint(f"Точка {self.name}, da", atrr=d.get("da","1"))
         self.result = FloatDataPoint(f"Точка {self.name}, результат", atrr=d.get("result","0.00"))
 
 
@@ -375,8 +431,6 @@ class MenuData:
         self.Z1 = FloatDataPoint(f"Вертикальное сечение {self.name}, Z1", atrr=d.get("Z1","0"))
         self.Z2 = FloatDataPoint(f"Вертикальное сечение {self.name}, Z2", atrr=d.get("Z2","2"))
         self.dg = FloatDataPoint(f"Вертикальное сечение {self.name}, dg", atrr=d.get("dg","0.5"))
-        self.dl = FloatDataPoint(f"Вертикальное сечение {self.name}, dl", atrr=d.get("dl","0.01"))
-        self.da = FloatDataPoint(f"Вертикальное сечение {self.name}, da", atrr=d.get("da","1"))
 
     def horizontal_area(self,d):
         self.line_color = d.get("line_color",'#000000')
@@ -386,8 +440,6 @@ class MenuData:
         self.Y2 = FloatDataPoint(f"Горизонтальное сечение {self.name}, Y2",koef=-1000, atrr=d.get("Y2",""))
         self.Z = FloatDataPoint(f"Горизонтальное сечение {self.name}, Z", atrr=d.get("Z","1.8"))
         self.dg = FloatDataPoint(f"Горизонтальное сечение {self.name}, dg", atrr=d.get("dg","0.5"))
-        self.dl = FloatDataPoint(f"Горизонтальное сечение {self.name}, dl", atrr=d.get("dl","0.01"))
-        self.da = FloatDataPoint(f"Горизонтальное сечение {self.name}, da", atrr=d.get("da","1"))
 
     def conductor(self,d):
         self.line_color = d.get("line_color",'#000000')
@@ -400,6 +452,20 @@ class MenuData:
 
         self.lbl_fmax = FloatDataPoint(f"Шина {self.name}, common_fmax", atrr=d.get("lbl_fmax",""))
         self.chck_fmax = d.get("chck_fmax", False)
+
+    def recconductor(self,d):
+        self.line_color = d.get("line_color",'#000000')
+        #self.I = FloatDataPoint(f"Шина {self.name}, I", atrr=d.get("I",""))
+        #self.deg = FloatDataPoint(f"Шина {self.name}, deg", atrr=d.get("deg",""))
+
+        self.tbl_XY = TableDataPoint(f"Проводник-приёмник {self.name}, XY", cols=2, koef=(1000,-1000), atrr=d.get("tbl_XY",[]))
+        self.tbl_Z = TableDataPoint(f"Проводник-приёмник {self.name}, Z", atrr=d.get("tbl_Z",[]))
+
+        self.tbl_diam = TableDataPoint(f"Проводник-приёмник {self.name}, diam", atrr=d.get("tbl_diam",[]))
+        self.tbl_mt = TableDataPoint(f"Проводник-приёмник {self.name}, mt", atrr=d.get("tbl_mt",[]))
+
+        #self.lbl_fmax = FloatDataPoint(f"Шина {self.name}, common_fmax", atrr=d.get("lbl_fmax",""))
+        #self.chck_fmax = d.get("chck_fmax", False)
 
     def reactor(self,d): 
         self.body_color = d.get("body_color",'#ff0000')
@@ -460,9 +526,16 @@ class MenuData:
             d["tbl_Z"] = self.tbl_Z.text
             d["tbl_fmax"] = self.tbl_fmax.text
             return d
+        
+        elif self.type_object == "recconductor":
+            d["line_color"] = self.line_color
+            d["tbl_XY"] = self.tbl_XY.text
+            d["tbl_Z"] = self.tbl_Z.text
+            d["tbl_diam"] = self.tbl_diam.text
+            d["tbl_mt"] = self.tbl_mt.text
+            return d
 
         elif self.type_object == "horizontal_area":
-            #print(self.X1.text,self.Y1.text,self.X2.text,self.Y2.text)
             d["line_color"] = self.line_color
             d["X1"] = self.X1.text
             d["Y1"] = self.Y1.text
@@ -470,8 +543,6 @@ class MenuData:
             d["Y2"] = self.Y2.text
             d["Z"] = self.Z.text
             d["dg"] = self.dg.text
-            d["da"] = self.da.text
-            d["dl"] = self.dl.text
             return d
 
         elif self.type_object == "vertical_area":
@@ -483,8 +554,6 @@ class MenuData:
             d["Z1"] = self.Z1.text
             d["Z2"] = self.Z2.text
             d["dg"] = self.dg.text
-            d["da"] = self.da.text
-            d["dl"] = self.dl.text
             return d
 
         elif self.type_object == "one_point":
@@ -492,8 +561,6 @@ class MenuData:
             d["X"] = self.X.text
             d["Y"] = self.Y.text
             d["Z"] = self.Z.text
-            d["da"] = self.da.text
-            d["dl"] = self.dl.text
             d["result"] = self.result.text
             return d
 
@@ -515,6 +582,9 @@ class MenuData:
             xmin, ymin, xmax, ymax = self._border((xmin, ymin, xmax, ymax),(self.X1.number_gui, -self.Y1.number_gui))
             xmin, ymin, xmax, ymax = self._border((xmin, ymin, xmax, ymax),(self.X2.number_gui, -self.Y2.number_gui))
         elif self.type_object == "conductor":
+            for x,y in self.tbl_XY.number_gui:
+                xmin, ymin, xmax, ymax = self._border((xmin, ymin, xmax, ymax),(x, -y))
+        elif self.type_object == "recconductor":
             for x,y in self.tbl_XY.number_gui:
                 xmin, ymin, xmax, ymax = self._border((xmin, ymin, xmax, ymax),(x, -y))
         elif self.type_object == "reactor":
@@ -562,38 +632,38 @@ class MenuData:
 
             return (self.type_object,a, alf, I)
 
+        elif self.type_object == "recconductor":
+            cord = tuple([(i,j,k) for (i,j),k in zip(self.tbl_XY.number,self.tbl_Z.number)])
+            a = (cord,tuple(self.tbl_diam.number),tuple(self.tbl_mt.text))
+
+            return (self.type_object,a)
+
         elif self.type_object == "horizontal_area":
             area_calc = (self.X1.number,self.Y2.number,self.X2.number,self.Y1.number)
             dg = self.dg.number
-            dl = self.dl.number
-            da = self.da.number
             z = (self.Z.number,)
 
-            return (self.type_object, area_calc, z, da, dl, dg)
+            return (self.type_object, area_calc, z,  dg)
 
         elif self.type_object == "vertical_area":
             area_calc = (self.X1.number,self.Y2.number,self.X2.number,self.Y1.number)
             dg = self.dg.number
-            dl = self.dl.number
-            da = self.da.number
             z = (self.Z1.number,self.Z2.number)
 
-            return (self.type_object, area_calc, z, da, dl, dg)
+            return (self.type_object, area_calc, z,  dg)
 
         elif self.type_object == "one_point":
-            area_calc = [self.X.number,self.Y.number]
+            area_calc = (self.X.number,self.Y.number)
             dg = 0.5
-            dl = self.dl.number
-            da = self.da.number
             z = (self.Z.number,)
 
-            return (self.type_object, area_calc, z, da, dl, dg)
+            return (self.type_object, area_calc, z,  dg)
 
 
 
 
 class OnePoint(QWidget):
-    def __init__(self,setCrl,getPos,setPos,parent=None,data=None):#
+    def __init__(self,setCrl,getPos,setPos,parent=None,data=None):
         super(OnePoint,self).__init__(parent)
         self.setCrl = setCrl
         self.getPos = getPos
@@ -601,7 +671,7 @@ class OnePoint(QWidget):
 
         self.setListName = lambda: 0
 
-        self.setFixedSize(320,200)
+        self.setFixedSize(260,175)
 
         self.setWindowTitle("В одной точке")
         HspacerItem = [QSpacerItem(2, 2, QSizePolicy.Expanding, QSizePolicy.Minimum) for i in range(2)]
@@ -632,8 +702,8 @@ class OnePoint(QWidget):
 
         self.Z = QLineEdit()
         self.Z.setValidator(MyValidator("duble",self.Z,minus=False))
-        grid_layout.addWidget(QLabel("Z, м:"),2,0)
-        grid_layout.addWidget(self.Z,2,1)
+        grid_layout.addWidget(QLabel("Z, м:"),0,2)
+        grid_layout.addWidget(self.Z,0,3)
 
 
         self.X = QLineEdit()
@@ -646,15 +716,15 @@ class OnePoint(QWidget):
         grid_layout.addWidget(QLabel("Y, м:"),1,0)
         grid_layout.addWidget(self.Y,1,1)
 
-        self.dl = QLineEdit()
-        self.dl.setValidator(MyValidator("duble",self.dl,minus=False))
-        grid_layout.addWidget(QLabel("dl проводника, м:"),0,2)
-        grid_layout.addWidget(self.dl,0,3)
+        #self.dl = QLineEdit()
+        #self.dl.setValidator(MyValidator("duble",self.dl,minus=False))
+        #grid_layout.addWidget(QLabel("dl проводника, м:"),0,2)
+        #grid_layout.addWidget(self.dl,0,3)
 
-        self.da = QLineEdit()
-        self.da.setValidator(MyValidator("duble",self.da,minus=False))
-        grid_layout.addWidget(QLabel("da реактора, \u00B0:"),1,2)
-        grid_layout.addWidget(self.da,1,3)
+        #self.da = QLineEdit()
+        #self.da.setValidator(MyValidator("duble",self.da,minus=False))
+        #grid_layout.addWidget(QLabel("da реактора, \u00B0:"),1,2)
+        #grid_layout.addWidget(self.da,1,3)
 
 
         self.ok = QPushButton("Ok")
@@ -690,20 +760,24 @@ class OnePoint(QWidget):
         self.line.setStyleSheet( " background-color: %s; " % self.line_color )
 
     def save_data(self):
-        self.data.line_color = self.line_color
-        self.data.name = self.name.text()
-        self.data.Z.setText(self.Z.text())
+        try:
+            self.data.line_color = self.line_color
+            self.data.name = self.name.text()
+            self.data.Z.setText(self.Z.text())
 
-        self.data.X.setText(self.X.text())
-        self.data.Y.setText(self.Y.text())
+            self.data.X.setText(self.X.text())
+            self.data.Y.setText(self.Y.text())
 
-        self.data.dl.setText(self.dl.text())
-        self.data.da.setText(self.da.text())
+            #self.data.dl.setText(self.dl.text())
+            #self.data.da.setText(self.da.text())
 
-        self.close()
-        self.setPos((self.data.X.number_gui,self.data.Y.number_gui))
-        self.setCrl()
-        self.setListName()
+            self.close()
+            self.setPos((self.data.X.number_gui,self.data.Y.number_gui))
+            self.setCrl()
+            self.setListName()
+        
+        except Exception as ex:
+            print(ex)
 
     def show(self, *args, **kwargs):
         try:
@@ -711,8 +785,8 @@ class OnePoint(QWidget):
             self.line_color = self.data.line_color if self.data.line_color != '' else QColor("black").name()
             self.line.setStyleSheet( " background-color: %s; " % self.line_color )
             self.Z.setText(self.data.Z.text)
-            self.dl.setText(self.data.dl.text)
-            self.da.setText(self.data.da.text)
+            #self.dl.setText(self.data.dl.text)
+            #self.da.setText(self.data.da.text)
 
             self.InitCords()
 
@@ -733,7 +807,7 @@ class CalcAreaV(QWidget):
 
         self.setListName = lambda: 0
 
-        self.setFixedSize(320,270)
+        self.setFixedSize(320,220)
 
         self.setWindowTitle("Вертикальная область")
         HspacerItem = [QSpacerItem(2, 2, QSizePolicy.Expanding, QSizePolicy.Minimum) for i in range(2)]
@@ -762,50 +836,50 @@ class CalcAreaV(QWidget):
 
         grid_layout = QGridLayout()
 
-        self.Z1 = QLineEdit()
-        self.Z1.setValidator(MyValidator("duble",self.Z1,minus=False))
-        grid_layout.addWidget(QLabel("Z1, м:"),0,0)
-        grid_layout.addWidget(self.Z1,0,1)
-
-        self.Z2 = QLineEdit()
-        self.Z2.setValidator(MyValidator("duble",self.Z2,minus=False))
-        grid_layout.addWidget(QLabel("Z2, м:"),1,0)
-        grid_layout.addWidget(self.Z2,1,1)
-
         self.X1 = QLineEdit()
         self.X1.setValidator(MyValidator("duble",self.X1,minus=True))
-        grid_layout.addWidget(QLabel("X1, м:"),2,0)
-        grid_layout.addWidget(self.X1,2,1)
+        grid_layout.addWidget(QLabel("X1, м:"),0,0)
+        grid_layout.addWidget(self.X1,0,1)
 
         self.Y1 = QLineEdit()
         self.Y1.setValidator(MyValidator("duble",self.Y1,minus=True))
-        grid_layout.addWidget(QLabel("Y1, м:"),3,0)
-        grid_layout.addWidget(self.Y1,3,1)
+        grid_layout.addWidget(QLabel("Y1, м:"),1,0)
+        grid_layout.addWidget(self.Y1,1,1)
 
         self.X2 = QLineEdit()
         self.X2.setValidator(MyValidator("duble",self.X2,minus=True))
-        grid_layout.addWidget(QLabel("X2, м:"),4,0)
-        grid_layout.addWidget(self.X2,4,1)
+        grid_layout.addWidget(QLabel("X2, м:"),2,0)
+        grid_layout.addWidget(self.X2,2,1)
 
         self.Y2 = QLineEdit()
         self.Y2.setValidator(MyValidator("duble",self.Y2,minus=True))
-        grid_layout.addWidget(QLabel("Y2, м:"),5,0)
-        grid_layout.addWidget(self.Y2,5,1)
+        grid_layout.addWidget(QLabel("Y2, м:"),3,0)
+        grid_layout.addWidget(self.Y2,3,1)
+
+        self.Z1 = QLineEdit()
+        self.Z1.setValidator(MyValidator("duble",self.Z1,minus=False))
+        grid_layout.addWidget(QLabel("Z1, м:"),0,2)
+        grid_layout.addWidget(self.Z1,0,3)
+
+        self.Z2 = QLineEdit()
+        self.Z2.setValidator(MyValidator("duble",self.Z2,minus=False))
+        grid_layout.addWidget(QLabel("Z2, м:"),1,2)
+        grid_layout.addWidget(self.Z2,1,3)
 
         self.dg = QLineEdit()
         self.dg.setValidator(MyValidator("duble",self.dg,minus=False))
-        grid_layout.addWidget(QLabel("Шаг сетки расчета, м:"),0,2)
-        grid_layout.addWidget(self.dg,0,3)
+        grid_layout.addWidget(QLabel("Шаг сетки расчета, м:"),2,2)
+        grid_layout.addWidget(self.dg,2,3)
 
-        self.dl = QLineEdit()
-        self.dl.setValidator(MyValidator("duble",self.dl,minus=False))
-        grid_layout.addWidget(QLabel("dl проводника, м:"),1,2)
-        grid_layout.addWidget(self.dl,1,3)
+        #self.dl = QLineEdit()
+        #self.dl.setValidator(MyValidator("duble",self.dl,minus=False))
+        #grid_layout.addWidget(QLabel("dl проводника, м:"),1,2)
+        #grid_layout.addWidget(self.dl,1,3)
 
-        self.da = QLineEdit()
-        self.da.setValidator(MyValidator("duble",self.da,minus=False))
-        grid_layout.addWidget(QLabel("da реактора, \u00B0:"),2,2)
-        grid_layout.addWidget(self.da,2,3)
+        #self.da = QLineEdit()
+        #self.da.setValidator(MyValidator("duble",self.da,minus=False))
+        #grid_layout.addWidget(QLabel("da реактора, \u00B0:"),2,2)
+        #grid_layout.addWidget(self.da,2,3)
 
 
         self.ok = QPushButton("Ok")
@@ -850,8 +924,8 @@ class CalcAreaV(QWidget):
         self.data.X2.setText(self.X2.text())
         self.data.Y2.setText(self.Y2.text())
         self.data.dg.setText(self.dg.text())
-        self.data.dl.setText(self.dl.text())
-        self.data.da.setText(self.da.text())
+        #self.data.dl.setText(self.dl.text())
+        #self.data.da.setText(self.da.text())
 
         self.close()
         self.setPos((self.data.X1.number_gui,self.data.Y1.number_gui,self.data.X2.number_gui,self.data.Y2.number_gui))
@@ -866,8 +940,8 @@ class CalcAreaV(QWidget):
             self.Z1.setText(self.data.Z1.text)
             self.Z2.setText(self.data.Z2.text)
             self.dg.setText(self.data.dg.text)
-            self.dl.setText(self.data.dl.text)
-            self.da.setText(self.data.da.text)
+            #self.dl.setText(self.data.dl.text)
+            #self.da.setText(self.data.da.text)
 
             self.InitCords()
 
@@ -892,7 +966,7 @@ class CalcAreaH(QWidget):
 
         self.setListName = lambda: 0
 
-        self.setFixedSize(320,250)
+        self.setFixedSize(320,220)
 
         self.setWindowTitle("Горизонтальная область")
         HspacerItem = [QSpacerItem(2, 2, QSizePolicy.Expanding, QSizePolicy.Minimum) for i in range(2)]
@@ -921,45 +995,45 @@ class CalcAreaH(QWidget):
 
         grid_layout = QGridLayout()
 
-        self.Z = QLineEdit()
-        self.Z.setValidator(MyValidator("duble",self.Z,minus=False))
-        grid_layout.addWidget(QLabel("Z, м:"),0,0)
-        grid_layout.addWidget(self.Z,0,1)
-
         self.X1 = QLineEdit()
         self.X1.setValidator(MyValidator("duble",self.X1,minus=True))
-        grid_layout.addWidget(QLabel("X1, м:"),1,0)
-        grid_layout.addWidget(self.X1,1,1)
+        grid_layout.addWidget(QLabel("X1, м:"),0,0)
+        grid_layout.addWidget(self.X1,0,1)
 
         self.Y1 = QLineEdit()
         self.Y1.setValidator(MyValidator("duble",self.Y1,minus=True))
-        grid_layout.addWidget(QLabel("Y1, м:"),2,0)
-        grid_layout.addWidget(self.Y1,2,1)
+        grid_layout.addWidget(QLabel("Y1, м:"),1,0)
+        grid_layout.addWidget(self.Y1,1,1)
 
         self.X2 = QLineEdit()
         self.X2.setValidator(MyValidator("duble",self.X2,minus=True))
-        grid_layout.addWidget(QLabel("X2, м:"),3,0)
-        grid_layout.addWidget(self.X2,3,1)
+        grid_layout.addWidget(QLabel("X2, м:"),2,0)
+        grid_layout.addWidget(self.X2,2,1)
 
         self.Y2 = QLineEdit()
         self.Y2.setValidator(MyValidator("duble",self.Y2,minus=True))
-        grid_layout.addWidget(QLabel("Y2, м:"),4,0)
-        grid_layout.addWidget(self.Y2,4,1)
+        grid_layout.addWidget(QLabel("Y2, м:"),3,0)
+        grid_layout.addWidget(self.Y2,3,1)
+
+        self.Z = QLineEdit()
+        self.Z.setValidator(MyValidator("duble",self.Z,minus=False))
+        grid_layout.addWidget(QLabel("Z, м:"),0,2)
+        grid_layout.addWidget(self.Z,0,3)
 
         self.dg = QLineEdit()
         self.dg.setValidator(MyValidator("duble",self.dg,minus=False))
-        grid_layout.addWidget(QLabel("Шаг сетки расчета, м:"),0,2)
-        grid_layout.addWidget(self.dg,0,3)
+        grid_layout.addWidget(QLabel("Шаг сетки расчета, м:"),1,2)
+        grid_layout.addWidget(self.dg,1,3)
 
-        self.dl = QLineEdit()
-        self.dl.setValidator(MyValidator("duble",self.dl,minus=False))
-        grid_layout.addWidget(QLabel("dl проводника, м:"),1,2)
-        grid_layout.addWidget(self.dl,1,3)
+        #self.dl = QLineEdit()
+        #self.dl.setValidator(MyValidator("duble",self.dl,minus=False))
+        #grid_layout.addWidget(QLabel("dl проводника, м:"),1,2)
+        #grid_layout.addWidget(self.dl,1,3)
 
-        self.da = QLineEdit()
-        self.da.setValidator(MyValidator("duble",self.da,minus=False))
-        grid_layout.addWidget(QLabel("da реактора, \u00B0:"),2,2)
-        grid_layout.addWidget(self.da,2,3)
+        #self.da = QLineEdit()
+        #self.da.setValidator(MyValidator("duble",self.da,minus=False))
+        #grid_layout.addWidget(QLabel("da реактора, \u00B0:"),2,2)
+        #grid_layout.addWidget(self.da,2,3)
 
 
         self.ok = QPushButton("Ok")
@@ -1004,8 +1078,8 @@ class CalcAreaH(QWidget):
         self.data.X2.setText(self.X2.text())
         self.data.Y2.setText(self.Y2.text())
         self.data.dg.setText(self.dg.text())
-        self.data.dl.setText(self.dl.text())
-        self.data.da.setText(self.da.text())
+        #self.data.dl.setText(self.dl.text())
+        #self.data.da.setText(self.da.text())
 
         #print(self.data.X1.text,self.data.Y1.text,self.data.X2.text,self.data.Y2.text)
 
@@ -1021,8 +1095,8 @@ class CalcAreaH(QWidget):
             self.line.setStyleSheet( " background-color: %s; " % self.line_color )
             self.Z.setText(self.data.Z.text)
             self.dg.setText(self.data.dg.text)
-            self.dl.setText(self.data.dl.text)
-            self.da.setText(self.data.da.text)
+            #self.dl.setText(self.data.dl.text)
+            #self.da.setText(self.data.da.text)
 
             self.InitCords()
 
@@ -1262,7 +1336,7 @@ class Conductor(QWidget):
                 self.table_fmax.setItem(i,2, QTableWidgetItem(tbl_fmax[i]))
 
         except Exception as ex:
-            print(ex)
+            print(ex,"why2")
         
         QWidget.show(self, *args, **kwargs)
 
@@ -1280,6 +1354,228 @@ class Conductor(QWidget):
             self.table_fmax.setItem(i,2, QTableWidgetItem(text))
 
 
+class Recconductor(QWidget):
+    def __init__(self,setCrl,getPos,setPos,parent=None, data= None):
+        super(Recconductor,self).__init__(parent)
+        self.setCrl = setCrl
+        self.getPos = getPos
+        self.setPos = setPos
+
+        self.setListName = lambda: 0
+
+        self.setFixedSize(620,360)
+
+        self.setWindowTitle("Проводник-приёмник")
+        HspacerItem = [QSpacerItem(2, 2, QSizePolicy.Expanding, QSizePolicy.Minimum) for i in range(2)]
+        #VspacerItem = [QSpacerItem(2, 2, QSizePolicy.Minimum, QSizePolicy.Expanding) for i in range(2)]
+
+        self.data = MenuData("recconductor") if data is None else data
+        self.data.setParent(self)
+        self.trig = (data is None)
+
+        self.name = QLineEdit()
+        BoxLayout1 = QVBoxLayout()
+        BoxLayout1.addWidget(QLabel("Название"))
+        BoxLayout1.addWidget(self.name)
+
+        BoxLayout2 = QHBoxLayout()
+        self.line = QPushButton()
+        self.line.setFixedWidth(23)
+        self.line_color = QColor("black").name()
+        self.line.setStyleSheet( " background-color: %s; " % self.line_color )
+        self.line.clicked.connect(self.getColor)
+        BoxLayout2.addWidget(QLabel("Цвет линии:"))
+        BoxLayout2.addWidget(self.line)
+        BoxLayout2.addWidget(QLabel("Количество узлов:"))
+        self.d_zp = QSpinBox()
+        self.d_zp.setRange(2,999)
+        self.d_zp.setSingleStep(1)
+        self.d_zp.setValue(2)
+        self.d_zp.editingFinished.connect(self.ResizeTables)
+        BoxLayout2.addWidget(self.d_zp)
+        BoxLayout2.addItem(HspacerItem[0])
+
+        BoxLayout31 = QHBoxLayout()
+        BoxLayout32 = QHBoxLayout()
+        self.materialCombo = QComboBox()
+        self.materialCombo.addItems(["Сталь","Медь","Алюминий"])
+        self.setMaterial = QPushButton("Установить материал")
+        self.setMaterial.clicked.connect(self.Set_mt)
+        self.formDiam = QLineEdit()
+        self.formDiam.setValidator(MyValidator("duble",self.formDiam,minus=False))
+        self.setDiam = QPushButton("Установить диаметр")
+        self.setDiam.clicked.connect(self.Set_diam)
+        BoxLayout31.addWidget(self.setDiam)
+        BoxLayout31.addWidget(self.formDiam)
+        BoxLayout32.addWidget(self.setMaterial)
+        BoxLayout32.addWidget(self.materialCombo)
+        
+        BoxLayout4 = QHBoxLayout()
+
+        BoxLayout41 = QVBoxLayout()
+        BoxLayout42 = QVBoxLayout()
+
+        self.table_cord = QTableWidget()
+        self.table_cord.setColumnCount(3)
+        self.table_cord.setColumnWidth(0,70)
+        self.table_cord.setColumnWidth(1,70)
+        self.table_cord.setColumnWidth(2,70)
+        self.table_cord.setHorizontalHeaderLabels(["x","y","z"])
+        self.table_cord.setItemDelegate(DownloadDelegate("cord",self))
+
+        BoxLayout41.addLayout(BoxLayout31)
+        BoxLayout41.addWidget(self.table_cord)
+
+        self.table_atr = QTableWidget()
+        self.table_atr.setColumnCount(4)
+        self.table_atr.setColumnWidth(0,70)
+        self.table_atr.setColumnWidth(1,70)
+        self.table_atr.setColumnWidth(2,70)
+        self.table_atr.setColumnWidth(3,70)
+        self.table_atr.setHorizontalHeaderLabels(["n","k","d","mt"])
+
+        BoxLayout42.addLayout(BoxLayout32)
+        BoxLayout42.addWidget(self.table_atr)
+
+        BoxLayout4.addLayout(BoxLayout41)
+        BoxLayout4.addLayout(BoxLayout42)
+
+        self.ok = QPushButton("Ok")
+        self.ok.clicked.connect(self.save_data)
+        self.cancel = QPushButton("Отмена")
+        self.cancel.clicked.connect(self.close)
+        BoxLayout5 = QHBoxLayout()
+        BoxLayout5.addItem(HspacerItem[1])
+        BoxLayout5.addWidget(self.ok)
+        BoxLayout5.addWidget(self.cancel)
+
+        BoxLayout6 = QVBoxLayout()
+        BoxLayout6.addLayout(BoxLayout1)
+        BoxLayout6.addLayout(BoxLayout2)
+        BoxLayout6.addLayout(BoxLayout4)
+        BoxLayout6.addLayout(BoxLayout5)
+
+        self.setLayout(BoxLayout6)
+
+        self.InitCords()
+
+    def InitCords(self):
+        self.get_table_cord = self.getPos()
+        self.data.tbl_XY.setNumber_gui(self.get_table_cord)
+        if self.trig:
+            ln = len(self.get_table_cord)
+            self.data.tbl_Z.setText([""]*ln)
+            self.data.tbl_diam.setText([""]*ln)
+            self.data.tbl_mt.setText([""]*ln)
+            self.trig = False
+  
+    def ResizeTables(self):
+        try:
+            new_rows = self.d_zp.value()
+            self.table_cord.setRowCount(new_rows)
+            self.table_atr.setRowCount(new_rows-1)
+
+            if new_rows>self.old_rows:
+                x = float(self.table_cord.item(self.old_rows-1,0).text())
+                y = float(self.table_cord.item(self.old_rows-1,1).text())
+                
+                for i in range(self.old_rows,new_rows):
+                    x+=1
+                    self.table_cord.setItem(i,0, QTableWidgetItem(str(round(x,3))))
+                    self.table_cord.setItem(i,1, QTableWidgetItem(str(y)))
+                    self.table_cord.setItem(i,2, QTableWidgetItem(("")))
+
+                for i in range(self.old_rows-1,new_rows-1):
+                    self.table_atr.setItem(i,0, QTableWidgetItem(str(i+1)))
+                    self.table_atr.setItem(i,1, QTableWidgetItem(str(i+2)))
+                    self.table_atr.setItem(i,2, QTableWidgetItem(("")))
+                    cb = QComboBox()
+                    cb.addItems(["Сталь","Медь","Алюминий"])
+                    self.table_atr.setCellWidget(i,3, cb)
+
+            self.old_rows = new_rows
+        except Exception as ex:
+            print(ex)
+
+    def getColor(self):
+            color = QColorDialog.getColor(initial=QColor(self.line_color),parent=self,\
+                        title="Цвет контура",options=QColorDialog.ShowAlphaChannel)
+            self.line_color = color.name()
+            self.line.setStyleSheet( " background-color: %s; " % self.line_color )
+
+    def save_data(self):
+        try:
+            self.data.line_color = self.line_color
+            self.data.name = self.name.text()
+
+            self.data.tbl_XY.setText([[self.table_cord.item(i, 0).text(),
+                                            self.table_cord.item(i, 1).text()] for i in range(self.old_rows)])
+
+            self.data.tbl_Z.setText([self.table_cord.item(i, 2).text() for i in range(self.old_rows)])
+
+            self.data.tbl_diam.setText([self.table_atr.item(i, 2).text()   for i in range(self.old_rows-1)])
+            self.data.tbl_mt.setText([self.table_atr.cellWidget(i, 3).currentText()  for i in range(self.old_rows-1)])
+            
+            self.close()
+            self.setPos(self.data.tbl_XY.number_gui)
+            self.setCrl()
+            self.setListName()
+        except Exception as ex:
+            print("save_data",ex)
+
+    def show(self, *args, **kwargs):
+        try:
+            self.name.setText(self.data.name)
+            self.line_color = self.data.line_color if self.data.line_color != '' else QColor("black").name()
+            self.line.setStyleSheet( " background-color: %s; " % self.line_color )
+
+            self.get_table_cord = self.getPos()
+
+            self.cord_col = len(self.get_table_cord)
+            self.old_rows = self.cord_col
+
+            self.data.tbl_XY.setNumber_gui(self.get_table_cord)
+
+            self.d_zp.setValue(self.cord_col)
+
+            self.table_cord.setRowCount(self.cord_col)
+
+            self.table_atr.setRowCount(self.cord_col-1)
+
+            tbl_XY = self.data.tbl_XY.text
+            tbl_Z = self.data.tbl_Z.text
+            tbl_diam = self.data.tbl_diam.text
+            tbl_mt = self.data.tbl_mt.text
+
+            for i in range(self.cord_col):
+                self.table_cord.setItem(i,0, QTableWidgetItem(tbl_XY[i][0]))
+                self.table_cord.setItem(i,1, QTableWidgetItem(tbl_XY[i][1]))
+                self.table_cord.setItem(i,2, QTableWidgetItem(tbl_Z[i]))
+
+            for i in range(self.cord_col-1):
+                self.table_atr.setItem(i,0, QTableWidgetItem(str(i+1)))
+                self.table_atr.setItem(i,1, QTableWidgetItem(str(i+2)))
+                self.table_atr.setItem(i,2, QTableWidgetItem(tbl_diam[i]))
+                cb = QComboBox()
+                cb.addItems(["Сталь","Медь","Алюминий"])
+                cb.setCurrentText(tbl_mt[i])
+                self.table_atr.setCellWidget(i,3, cb)
+
+        except Exception as ex:
+            print(ex)
+        
+        QWidget.show(self, *args, **kwargs)
+
+    
+    def Set_diam(self):
+        text = self.formDiam.text()
+        for i in range(self.cord_col-1):
+            self.table_atr.item(i,2).setText(text)
+
+    def Set_mt(self):
+        text = self.materialCombo.currentText() 
+        for i in range(self.cord_col-1):
+            self.table_atr.cellWidget(i, 3).setCurrentText(text)
 
 
 
@@ -1584,12 +1880,12 @@ class Reactor(QWidget):
 
 
 if __name__ == '__main__':
-    """ from PyQt5.QtWidgets import QApplication
+    from PyQt5.QtWidgets import QApplication
     import sys
     app = QApplication(sys.argv)
-    ex = Save_Widget([],lambda a,b:print(a,b))
+    ex = Recconductor(None,None,None)
     ex.show()
-    sys.exit(app.exec_()) """
+    sys.exit(app.exec_())
 
 
         
