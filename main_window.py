@@ -19,7 +19,9 @@ from main_calculate import run_area_calc, point_calc, setTypes, cuda_available, 
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from matplotlib.colors import LogNorm
+from matplotlib.colors import LogNorm, Normalize
+from matplotlib.collections import LineCollection
+from matplotlib.cm import jet
 import matplotlib.pyplot as plt
 import matplotlib.ticker
 import matplotlib
@@ -30,6 +32,8 @@ arial_font = fm.FontProperties(fname = "Fonts/arial.ttf")
 import numpy as np
 import scipy.interpolate
 from functools import partial
+
+from openpyxl import load_workbook, Workbook
 
 import dxf
 
@@ -442,6 +446,7 @@ class Screen(QMainWindow):
         self.Canv = FigureCanvas(self.fig)
 
         self.rbf = None
+        self.last_fig = None # Mfield, Irec
 
         self.Canv.setFocusPolicy(Qt.ClickFocus)
         self.Canv.setFocus()
@@ -604,6 +609,17 @@ class Screen(QMainWindow):
         RecCurCalcAction.triggered.connect(self.RecCalc) 
         ResultMenu.addAction(RecCurCalcAction)
 
+        RecEcxSvAction = QAction('Соранить приемники в Excel', self)
+        #RecCurCalcAction.setShortcut('Ctrl+R')
+        RecEcxSvAction.triggered.connect(self.SaveExcel) 
+        ResultMenu.addAction(RecEcxSvAction)
+
+        RecDXFSvAction = QAction('Сохранить приемники в dxf', self)
+        #SaveInDXFAction.setShortcut('Ctrl+R')
+        RecDXFSvAction.triggered.connect(self.SaveRecInDXF) 
+        ResultMenu.addAction(RecDXFSvAction)
+
+        
 
         settingsMenu = menubar.addMenu('&Настройки')
 
@@ -650,9 +666,10 @@ class Screen(QMainWindow):
         # Dict for using cashe of calculate
         try:
             with open('Cashe_files/cahse.pkl', "rb" ) as f:
-                self.Cashe  = pickle.load(f)
+                self.Cashe, self.MutualCashe = pickle.load(f)
         except Exception:
             self.Cashe = {}
+            self.MutualCashe = {}
 
     def DragObj(self,state):
         self.drag_state = state
@@ -667,17 +684,22 @@ class Screen(QMainWindow):
         reply = Message.exec()
         if reply == 0:
             with open('Cashe_files/cahse.pkl', "wb" ) as f:
-                pickle.dump(self.Cashe,f)
+                pickle.dump([self.Cashe,self.MutualCashe],f)
             event.accept()
         elif reply == 1:
             event.ignore()
 
     def on_mouse_move(self,click):
         x, y = click.xdata, click.ydata
-        if self.rbf is not None and x is not None and y is not None:
-            x, y = np.around(x, 3), np.around(y, 3)
-            H  = np.around(self.rbf(x,y))
-            self.status_string.showMessage(f"x: {x}, y: {y}, H: {H}")
+        if self.last_fig == 'Mfield':
+            if self.rbf is not None and x is not None and y is not None:
+                x, y = np.around(x, 3), np.around(y, 3)
+                H  = np.around(self.rbf(x,y))
+                self.status_string.showMessage(f"x: {x}, y: {y}, H: {H}")
+        elif self.last_fig == 'Irec':
+            if x is not None and y is not None:
+                x, y = np.around(x, 3), np.around(y, 3)
+                self.status_string.showMessage(f"x: {x}, y: {y}")
 
     def SavePlot(self):
         try:
@@ -795,6 +817,8 @@ class Screen(QMainWindow):
                 self.Ind.reset()
             else:
                 self.Ind.setLabelText("Создаются линии уровня")
+
+            self.last_fig = 'Mfield'
 
             tp, area_calc, z = area[:3]
             print(np.shape(H_area))
@@ -1020,12 +1044,91 @@ class Screen(QMainWindow):
             dl = self.dl.value()
             da = self.da.value()
             
-            receivers_calc(sourses, receivers, dl, da)
+            Id, Lines, setTextPos, get_colors,self.ExcSv = receivers_calc(sourses, receivers, dl, da, self.MutualCashe, excel=True)
+            self.RecCanvas(Id, Lines, setTextPos, get_colors)
 
             print("RecCalc")
         except Exception as ex:
             print(ex, "RecCalc")
-    
+
+    def RecCanvas(self, Id, Lines, setTextPos, get_colors):
+        self.last_fig = 'Irec'
+        fig_lines = []
+        minXL, maxXL, minYL, maxYL = float("inf"), float("-inf"), float("inf"), float("-inf")
+        for i in Lines:
+            minXL, maxXL, minYL, maxYL = min(i[0][0],i[1][0],minXL), max(i[0][0],i[1][0],maxXL),min(i[0][1],i[1][1],minYL), max(i[0][1],i[1][1],maxYL)
+            fig_lines.append([i[0][:-1],i[1][:-1]])
+
+        self.fig.clear()
+        ax = self.fig.add_subplot(111) #
+
+        border = abs(((maxXL-minXL)+(maxYL-minYL))/2*0.1)
+
+        ax.set_xlim(minXL-border, maxXL+border)
+        ax.set_ylim(minYL-border, maxYL+border)
+
+        line_segments = LineCollection(fig_lines,
+                                    linewidths=2,
+                                    linestyles='solid',cmap=jet) #, alpha=0.4 linewidths=(0.5, 1, 1.5, 2)
+
+        line_segments.set_array(Id)
+        
+        for ((x,y), deg, ha),i in zip(setTextPos(fig_lines),Id):
+            ax.text(x,y,str(round(i,2)),\
+                        horizontalalignment=ha,verticalalignment="bottom",rotation=deg,fontsize=8)#fontproperties=arial_font,fontsize=text
+
+        lim = (np.min(Id), np.max(Id))
+        line_segments.set_clim(lim)
+
+        #print(get_colors(Id,lim,jet,Normalize))
+
+        ax.add_collection(line_segments)
+
+        axcb = self.fig.colorbar(line_segments)
+        axcb.set_label('I, A')
+
+        ax.set_title('Ток в приемниках')
+        ax.set_xlabel(u'X, м') 
+        ax.set_ylabel(u'Y, м') 
+        ax.grid()
+
+        self.Canv.draw() # Выводим график в виджет
+        self.tab.setCurrentIndex(1)
+
+    def SaveExcel(self):
+        try:
+            wb = Workbook()
+            ws=wb.active
+            fname = QFileDialog.getSaveFileName(self, 'Сохранить файл', self.path_home,'*.xlsx;;*.xls')[0]
+            for (i,j),val in self.ExcSv.items():
+                ws.cell(row=i+1,column=j+1).value = val
+            wb.save(fname)
+        except Exception as ex:
+            print(ex)
+
+    def SaveRecInDXF(self):
+        try:
+            fname = QFileDialog.getSaveFileName(self, 'Сохранить файл', self.path_home,'*.dxf')[0]
+            receivers = []
+            for key, val in self.ReceiverObjectsDict.items():
+                if key.checkState(0) == Qt.Checked and val.type_link == "object":
+                    receivers.append(val.graphic_item.menu.data.read_data())
+
+            sourses = self.get_object_data()[0]
+
+            dl = self.dl.value()
+            da = self.da.value()
+            
+            Id, Lines, setTextPos, get_colors = receivers_calc(sourses, receivers, dl, da, self.MutualCashe)
+
+            lim = (np.min(Id), np.max(Id))
+            colors = get_colors(Id,lim,jet,Normalize)
+            text = [str(round(i,2)) for i in Id]
+
+            dxf.SaveRecInDXF(Lines,text,colors,setTextPos,fname)
+
+        except Exception as ex:
+            print("SaveRecInDXF",ex)
 
     def SaveInDXFstart(self):
         try:

@@ -109,6 +109,26 @@ def color_distance(rgb1, rgb2):
     bd = ((3 - rm) * (rgb1[2] - rgb2[2])) ** 2
     return (rd + gd + bd) ** 0.5
 
+def SaveRecInDXF(cords, text,clrs,setTextPos,fname):
+    doc = ezdxf.new(dxfversion='R2010')
+    msp = doc.modelspace()
+    lv = "receivers"
+    doc.layers.new(lv)
+    l = [((x1,y1),(x2,y2)) for ((x1,y1,z1),(x2,y2,z2)) in cords]
+    points = setTextPos(l)
+
+    for i in range(len(l)):
+        ((x1,y1),(x2,y2))=l[i]
+        (x3,y3) = points[i][0]
+        line_color = min([(v,color_distance(clrs[i][:-1], k)) for k,v in colors.items()],key=lambda a:a[1])[0]
+        msp.add_line((x1*1000, y1*1000), (x2*1000, y2*1000), dxfattribs={'layer': lv,'color': line_color})
+        msp.add_text(text[i],
+            dxfattribs={'layer': lv,
+                        'height': 2.5}).set_pos((x3*1000, y3*1000+2.5), align='CENTER')
+
+    doc.saveas(fname)
+    print("SaveRecInDXF")
+
 
 def SaveInDXF(sp_points,sp_levels,sourses_layers,fname):
     print("dxf start")

@@ -1,13 +1,14 @@
 from gputreads import Paralel_Calc, distribution_memory
 import numpy as np
 import torch
-import matplotlib.pyplot as plt
-from matplotlib.cm import ScalarMappable
 import scipy.interpolate
 from scipy.optimize import fsolve,broyden1
-from make_graph import getGraph
+from make_graph import getGraph, setTextPos
 
 from time import time, sleep
+
+
+
 
 
 alf1=np.cos(240*np.pi/180)+1j*np.sin(240*np.pi/180)
@@ -644,7 +645,63 @@ def run_area_calc(sourses, area, deg, DL, callback_func = None):
         H_area = np.linalg.norm(H_point)
 
         return str(round(H_area,2)) """
-def receivers_calc(sousces, receivers, DL, da):
+
+def excelData(Lines,R,L,dm,mt,Ir,Is,As,A0,Source_M,Rec_M):
+    r,s = len(Lines), np.shape(Is)[0]
+
+    Data = {}
+    title = ["х1,м","у1,м","z1,м","х2,м","у2,м","z2,м","Ir,А","alf,град","d, мм","mt","R,Ом","L,Гн","Source_M,Гн"]
+    for i in range(len(title)):
+        Data[(0,i)] = title[i]
+
+    for i in range(r):
+        Data[(i+1,0)] = Lines[i][0][0]
+        Data[(i+1,1)] = Lines[i][0][1]
+        Data[(i+1,2)] = Lines[i][0][2]
+
+        Data[(i+1,3)] = Lines[i][1][0]
+        Data[(i+1,4)] = Lines[i][1][1]
+        Data[(i+1,5)] = Lines[i][1][2]
+
+        Data[(i+1,6)] = np.abs(Ir[i])
+        Data[(i+1,7)] = np.angle(Ir[i],deg=True)
+
+        Data[(i+1,8)] = dm[i]
+        Data[(i+1,9)] = mt[i]
+
+        Data[(i+1,10)] = R[i]
+        Data[(i+1,11)] = L[i]
+
+    for i in range(r):
+        for j in range(s):
+            Data[(i+1,j+13)] = np.real(Source_M[i][j])
+
+    Data[(r+1,12)] = "Is,А"
+    Data[(r+2,12)] = "alf,град"
+    for j in range(s):
+        Data[(r+1,j+13)] = np.abs(Is[j])
+        Data[(r+2,j+13)] = np.angle(As[j],deg=True)
+
+    n = 13+s
+    Data[(0,n)] = "Rec_M,Гн"
+    for i in range(r):
+        for j in range(r):
+            Data[(i+1,j+n+1)] = np.real(Rec_M[i][j])
+
+    Data[(r+1,0)] = "А0"
+    for i in range(np.shape(A0)[0]):
+        for j in range(np.shape(A0)[1]):
+            Data[(r+2+i,j)] = A0[i][j]
+
+    return Data
+
+
+def get_colors(arr,lim,cmap,norm):
+    n = norm(vmin=lim[0], vmax=lim[1])
+    return [cmap(n(i),bytes=True) for i in arr]
+
+
+def receivers_calc(sousces, receivers, DL, da, MutualCashe, excel=False):
     pls, diam, materials = [],[],[]
 
     for pl in receivers:
@@ -652,7 +709,7 @@ def receivers_calc(sousces, receivers, DL, da):
         diam.append(pl[1][1])
         materials.append(pl[1][2])
 
-    A0, Lines, R, L = getGraph(pls, diam, materials)
+    A0, Lines, R, L, _dm, _mt = getGraph(pls, diam, materials)
 
     S_alfs, S_cordinates, S_dls, S_Is = [],[],[],[]
 
@@ -679,7 +736,8 @@ def receivers_calc(sousces, receivers, DL, da):
         R_dls.append(dl)
     r, s = len(R_dls), len(S_dls)
     Source_M = np.zeros((r,s),dtype=numbers_type[2])
-    Z = np.zeros((r,r),dtype=numbers_type[2])
+    M = np.zeros((r,r),dtype=numbers_type[2])
+    Zd = np.zeros(r,dtype=numbers_type[2])
     
     
     #free_mmr = distribution_memory([S_cordinates+R_cordinates,S_dls+R_dls],coef=2.3)
@@ -695,73 +753,69 @@ def receivers_calc(sousces, receivers, DL, da):
     t1 = time()
     for i in range(r):
         for j in range(s):
-            Source_M[i][j] = 1j*float(MutualInductTorch([R_cordinates[i],R_dls[i],S_cordinates[j],S_dls[j]]))*2*np.pi*50
-            #print(i,j)
+            key = (sousces[j][0:2], Lines[i], (DL,da))
+            if key not in MutualCashe:
+                rez = float(MutualInductTorch([R_cordinates[i],R_dls[i],S_cordinates[j],S_dls[j]]))
+                MutualCashe[key] = rez
+            else:
+                rez = MutualCashe[key]
+
+            Source_M[i][j] = rez
+
 
     t2 = time()
     print(t2-t1)
     t1 = time()
     for i in range(r):
-        for j in range(r):
+        for j in range(i,r):
             if i==j: 
-                Z[i][j] = R[i]+ 1j*L[i]*2*np.pi*50
+                Zd[i] = R[i]+ 1j*L[i]*2*np.pi*50
             else:
-                gg = MutualInductTorch([R_cordinates[i],R_dls[i],R_cordinates[j],R_dls[j]])
-                #print(gg,i,j)
-                #print(R_cordinates)
-                #print(R_dls)
-                Z[i][j] = 1j*float(gg)*2*np.pi*50
-            #print(i,j)
+                key1 = (Lines[i], Lines[j], (DL,da))
+                key2 = (Lines[j], Lines[i], (DL,da))
+                if key1 in MutualCashe:
+                    rez = MutualCashe[key1]
+                elif key2 in MutualCashe:
+                    rez = MutualCashe[key2]
+                else:
+                    rez = float(MutualInductTorch([R_cordinates[i],R_dls[i],R_cordinates[j],R_dls[j]]))
+                    MutualCashe[key1] = rez
+
+                M[i][j] = rez
+                M[j][i] = rez
+
 
     t2 = time()
     print(t2-t1)
-    print("point_1")
     I = np.array(S_Is,dtype=numbers_type[2])
     Alf = np.array(S_alfs,dtype=numbers_type[2])
-    E = np.dot(Source_M,I*Alf)
-    print("point_2")
-    dZ = np.diag(np.diagonal(Z))
-    print("point_3")
-    W = Z-dZ
-    print("point_4")
+    E = np.dot(Source_M*1j*2*np.pi*50,I*Alf)
+    
+    #dZ = np.diag(np.diagonal(Z))
+    dZ = np.diag(Zd)
+    W = M*1j*2*np.pi*50
+    Z = W+dZ
+    #W = Z-dZ
     A = A0[:-1,:]
-    print("point_5")
     At = A.transpose()
-    print("point_6")
     dY=np.linalg.inv(dZ)
-    print("point_7")
     Yy=np.dot(np.dot(A,dY),At)
-    print("point_8")
     J=np.dot(np.dot(A,dY),E)
-    print("point_9")
-    #print(np.shape(J),np.shape(E))
     JE=np.hstack([J, E])
-    print("point_10")
     KI=np.dot(A,np.dot(W,dY).transpose())
-    print("point_11")
     YZ=np.vstack([np.hstack([Yy, KI]), np.hstack([At, Z])])
-    print("point_12")
     H=np.linalg.solve(YZ,JE)
-    print("point_13")
-
-    print(Z)
-
-    for i in range(np.shape(E)[0]):
-        print(abs(E[i]))
-    print("-"*10)
-    for i in range(np.shape(H)[0]):
-        print(abs(H[i]))
-    """ dl_1, dl_2 = tensor_list[1],tensor_list[3]
-    t_1 = dl_1.size()[0]
-    t_2 = dl_2.size()[0]
     
-    Cordinates_1 = tensor_list[0][:t_1,:]
-    Cordinates_2 = tensor_list[2][:t_2,:] """
+    Id = np.abs(H[-r:])
 
-    print(A)
-    #pass
+    data = excelData(Lines,R,L,_dm,_mt,H[-r:],I,Alf,A0,Source_M,M)
+    if excel:
+        return Id, Lines, setTextPos, get_colors, data
+    else:
+        return Id, Lines, setTextPos, get_colors
 
-    
+
+        
 
 if __name__ == '__main__':
     #cordinates_1,dl_1 = provod(0,0,  0, 1,0,  0,1000)

@@ -2,12 +2,17 @@ import numpy as np
 
 mat = {"Сталь":0.115,"Медь":0.0175,"Алюминий":0.028} #Ом*мм2/м
 
-def Distance(line):
+def Distance(line,tp="3D"):
     """ Расчёт растояния между двумя точками """
     #print(np.sqrt((line[1][0]-line[0][0])**2+(line[1][1]-line[0][1])**2))
-    (x1,y1,z1),(x2,y2,z2) = line
+    
     #np.linalg.norm(rv,axis=1)
-    return np.sqrt((x2-x1)**2+(y2-y1)**2+(z2-z1)**2)
+    if tp == "3D":
+        (x1,y1,z1),(x2,y2,z2) = line
+        return np.sqrt((x2-x1)**2+(y2-y1)**2+(z2-z1)**2)
+    elif tp == "2D":
+        (x1,y1),(x2,y2) = line
+        return np.sqrt((x2-x1)**2+(y2-y1)**2)
 
 
 def Lies(point,line):
@@ -51,19 +56,42 @@ def LiesBadPoint(point,line,h):
 
         return False
 
-def VHLine(line):
+def VHLine(line,pc):
     """ Получение близких к граничным координат на линии """
     [(x1,y1),(x2,y2)] = line
-    d=Distance(line)
-    m=0.1/d
+    d=Distance(line,tp="2D")
+    m=d*pc/d
     l1=m/(1-m)
-    l2=(1-m)/m
     x3=(x1+x2*l1)/(1+l1)
     y3=(y1+y2*l1)/(1+l1)
-    x4=(x1+x2*l2)/(1+l2)
-    y4=(y1+y2*l2)/(1+l2)
     
-    return [(x3,y3),(x4,y4)]
+    return (x3,y3)
+
+def getDeg(line):
+    (x1,y1),(x2,y2) = line
+    if x1==x2 and y2>y1:
+        return 90
+    elif x1==x2 and y2<y1:
+        return 270
+    else:
+        deg = np.rad2deg(np.arctan((y2-y1)/(x2-x1)))
+        if x2-x1<0 and y2-y1>0:
+            deg+=180
+        elif x2-x1<0 and y2-y1<0:
+            deg+=180
+        elif x2-x1>0 and y2-y1<0:
+            deg+=360
+        return deg
+
+def setTextPos(lines):
+    params = []
+    for line in lines:
+        p = VHLine(line,0.5)
+        deg = getDeg(line)
+        deg = deg-180 if 90<deg<270 else deg
+        params.append([p,deg,'right' if 0<=deg<=180 else "left"])
+
+    return params
 
 p = [
     [(1.0, 1.0, 1.0), (4.0, 1.0, 1.0), (7.0, 1.0, 1.5)],
@@ -136,7 +164,7 @@ def getGraph(pls, diam, materials):
             branches3.append([pl, ln, nd1, nd2])
 
     A = np.zeros((len(nodes3),len(branches3)),dtype=np.float32)
-    R, L, Lines = [], [], []
+    R, L, Lines, dm, mt = [], [], [], [], []
 
     j=-1
     for pl, ln, nd1, nd2 in branches3:
@@ -149,17 +177,9 @@ def getGraph(pls, diam, materials):
         Rc = mat[materials[pl][ln]]*d/(np.pi*diam[pl][ln]**2/4)
         L.append(Lc)
         R.append(Rc)
+        dm.append(diam[pl][ln])
+        mt.append(materials[pl][ln])
         Lines.append((nd1,nd2))
 
-    return A, tuple(Lines), tuple(R), tuple(L)
+    return A, tuple(Lines), tuple(R), tuple(L), tuple(dm), tuple(mt)
 
-
-
-    """ for i,j in nodes3.items():
-        print(i,j)
-    for i in branches3:
-        print(i)
-
-    print(A) """
-
-#getGraph(p)
