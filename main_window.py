@@ -340,7 +340,6 @@ class Screen(QMainWindow):
         self.SoursesObjectsTree.itemPressed.connect(lambda a,b:print("Pressed",a,b))
         self.SoursesObjectsTree.itemDoubleClicked.connect(lambda a,b:print("DoubleClicked",a,b)) """
 
-        self.pcalc = False
 
         self.SoursesObjectsTree.setColumnCount(2)
         self.SoursesObjectsTree.setHeaderLabels(["","Источники"])
@@ -645,11 +644,26 @@ class Screen(QMainWindow):
         dragable.setChecked(True)
         dragable.triggered.connect(self.DragObj)
 
+
+        ReCalcPoints = QAction('Автопересчёт точек', self) 
+        ReCalcPoints.setCheckable(True)
+        self.pcalc = True #{"state":True}
+        ReCalcPoints.setChecked(True)
+        ReCalcPoints.triggered.connect(lambda a:self.setAttr(self,"pcalc",a))
+
+        WriteCurrents = QAction('Подписывание токов', self) 
+        WriteCurrents.setCheckable(True)
+        self.wrText = True
+        WriteCurrents.setChecked(True)
+        WriteCurrents.triggered.connect(lambda a:self.setAttr(self,"wrText",a))
+        
         
         settingsMenu.addAction(fl32)
         settingsMenu.addAction(fl64)
         settingsMenu.addAction(sep1)
         settingsMenu.addAction(dragable)
+        settingsMenu.addAction(ReCalcPoints)
+        settingsMenu.addAction(WriteCurrents)
 
         Splitter1 = QSplitter(Qt.Horizontal) 
         Splitter1.addWidget(LeftPanelFrame)
@@ -671,6 +685,10 @@ class Screen(QMainWindow):
             self.Cashe = {}
             self.MutualCashe = {}
 
+    @staticmethod
+    def setAttr(obj,name,val):
+        setattr(obj,name,val)
+    
     def DragObj(self,state):
         self.drag_state = state
         self.scene.dragable(state)
@@ -1007,26 +1025,27 @@ class Screen(QMainWindow):
 
 
     def PointCalc(self, who, data=None):
-        try:
-            if who == "sourses":
-                sourses,layers = self.get_object_data()
+        if self.pcalc:
+            try:
+                if who == "sourses":
+                    sourses,layers = self.get_object_data()
 
-                points = []
-                for obj in self.AreasObjectsDict.values():
-                    if obj.type_link=="object":
-                        if obj.type_object == "one_point" and obj.state:
-                            points.append(obj.graphic_item.menu.data)
+                    points = []
+                    for obj in self.AreasObjectsDict.values():
+                        if obj.type_link=="object":
+                            if obj.type_object == "one_point" and obj.state:
+                                points.append(obj.graphic_item.menu.data)
 
-                point_calc(sourses,points, self.da.value(), self.dl.value())
-            
-            elif who == "areas":
-                sourses,layers = self.get_object_data()
-                points = [data]
+                    point_calc(sourses,points, self.da.value(), self.dl.value())
+                
+                elif who == "areas":
+                    sourses,layers = self.get_object_data()
+                    points = [data]
 
-                point_calc(sourses,points, self.da.value(), self.dl.value())
+                    point_calc(sourses,points, self.da.value(), self.dl.value())
 
-        except Exception:
-            pass
+            except Exception:
+                pass
 
         #print("end_move")
 
@@ -1073,9 +1092,10 @@ class Screen(QMainWindow):
 
         line_segments.set_array(Id)
         
-        for ((x,y), deg, ha),i in zip(setTextPos(fig_lines),Id):
-            ax.text(x,y,str(round(i,2)),\
-                        horizontalalignment=ha,verticalalignment="bottom",rotation=deg,fontsize=8)#fontproperties=arial_font,fontsize=text
+        if self.wrText:
+            for ((x,y), deg, ha),i in zip(setTextPos(fig_lines),Id):
+                ax.text(x,y,str(round(i,2)),\
+                            horizontalalignment=ha,verticalalignment="bottom",rotation=deg,fontsize=8)#fontproperties=arial_font,fontsize=text
 
         lim = (np.min(Id), np.max(Id))
         line_segments.set_clim(lim)
@@ -1297,10 +1317,10 @@ class Screen(QMainWindow):
                 if ObjDict[item].type_link != "layer": item = item.parent()
 
                 if type_obj == "reactor": 
-                    DrawObj = GraphicsCircleItem((cx,cy,wd),calc_func=self.PointCalc if self.pcalc else None)
+                    DrawObj = GraphicsCircleItem((cx,cy,wd),calc_func=self.PointCalc)
                     link_obj = "images/reactor.png"
                 elif type_obj == "conductor": 
-                    DrawObj = GraphicsPolylineItem([[cx-wd,cy-hg],[cx+wd,cy+hg]],calc_func=self.PointCalc if self.pcalc else None)
+                    DrawObj = GraphicsPolylineItem([[cx-wd,cy-hg],[cx+wd,cy+hg]],calc_func=self.PointCalc)
                     link_obj = "images/conductor.png"
                 elif type_obj == "horizontal_area": 
                     DrawObj = GraphicsRectItem((cx-wd,cy-hg,cx+wd,cy+hg))
@@ -1309,7 +1329,7 @@ class Screen(QMainWindow):
                     DrawObj = GraphicsLineItem((cx-wd,cy-hg,cx+wd,cy+hg))
                     link_obj = "images/line.png" 
                 elif type_obj == "one_point": 
-                    DrawObj = OneCalcCircle((cx,cy), calc_func=self.PointCalc if self.pcalc else None)
+                    DrawObj = OneCalcCircle((cx,cy), calc_func=self.PointCalc)
                     link_obj = "images/point.png"
                 elif type_obj == "recconductor": 
                     DrawObj = RecPolylineItem([[cx-wd,cy-hg],[cx+wd,cy+hg]])
@@ -1606,7 +1626,7 @@ class Screen(QMainWindow):
                     child.setIcon(1,QIcon("images/reactor.png"))
                     parent.addChild(child)
 
-                    Circle = GraphicsCircleItem((cord[0][0],-cord[0][1],cord[1]),data=data,calc_func=self.PointCalc if self.pcalc else None)
+                    Circle = GraphicsCircleItem((cord[0][0],-cord[0][1],cord[1]),data=data,calc_func=self.PointCalc)
                     Circle.hndl*=1/scl_layers  
                     Circle.updateHandlesPos()
                     Circle.dragable(self.drag_state)
@@ -1623,7 +1643,7 @@ class Screen(QMainWindow):
                     child.setIcon(1,QIcon("images/conductor.png"))
                     parent.addChild(child)
 
-                    Polyline = GraphicsPolylineItem([[xy[0], -xy[1]] for xy in cord],data=data,calc_func=self.PointCalc if self.pcalc else None)
+                    Polyline = GraphicsPolylineItem([[xy[0], -xy[1]] for xy in cord],data=data,calc_func=self.PointCalc)
                     Polyline.hndl*=1/scl_layers  
                     Polyline.updateHandlesPos()
                     Polyline.dragable(self.drag_state)
@@ -1685,7 +1705,7 @@ class Screen(QMainWindow):
                     child.setIcon(1,QIcon("images/point.png"))
                     parent.addChild(child)
                     
-                    CalcArea = OneCalcCircle((cord[0],-cord[1]),data=data,calc_func=self.PointCalc if self.pcalc else None)
+                    CalcArea = OneCalcCircle((cord[0],-cord[1]),data=data,calc_func=self.PointCalc)
                     CalcArea.menu.data.name = name_obj
                     CalcArea.hndl*=1/scl_layers
                     CalcArea.updateHandlesPos()

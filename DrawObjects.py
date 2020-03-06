@@ -319,7 +319,6 @@ class GraphicsPolylineItem(QGraphicsItem):
         
 
     def hoverMoveEvent(self, moveEvent):
-        print("gegegege")
         """ Выполняется, когда мышь перемещается по фигуре (NOT PRESSED). """
         self.look_object = True
         if self.isSelected():
@@ -402,7 +401,6 @@ class GraphicsPolylineItem(QGraphicsItem):
             self.updateHandlesPos()
 
     def BoundingPoligon(self,line):
-        #print("gegegege")
         """ Возращает полигон, ограничивающий фигуру """
         o = self.handleSize + self.handleSpace
         alf = math.radians(line.angle())
