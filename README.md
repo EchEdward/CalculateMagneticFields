@@ -17,9 +17,15 @@
 
 
 
-![Alt Text](.github/images/MCF formulas.jpg)
+![Alt Text](.github/images/MCF_formulas.jpg)
 
-![Alt Text](.github/images/MCF 5.jpg)
+![Alt Text](.github/images/MCF_5.jpg)
+
+![Alt Text](.github/images/MCF_1.jpg)
+
+![Alt Text](.github/images/MCF_2.jpg)
+
+![Alt Text](.github/images/MCF_3.jpg)
 
 
 
