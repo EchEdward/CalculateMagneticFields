@@ -15,22 +15,25 @@
 
 ## Description
 
+To provide electromagnetic compatibility of technical means of electric industry objects it's neccessary to do some acts to check electromagnetic environment and if electromagnetic compatibility wasn't provided, it's neccessary to do actions that will make required compatibility. In case designing of electric industry objects calculatings are a singular way of definition electromagnetic environment.
+
 Для обеспечения электромагниной совместимости технических средсв объектов электроэнергетики необходимо провести ряд действи по оценке текущей электомагнитной обстановки и при невозможности обеспечениия электромагниной совместимости провести ряд мероприятий по доведению текушей обстановки до требуемого состояния. При проектировании объектов электроэнергетики единственным способом определения электомагнитной обстановки является проведение ряда расчётов.
+
+One of a conditions of electromagnetic compatibility is values of magnetic field strength near technical means don't have to be  more than admissible, what in case of designing creates neccessary to calculate values of magnetic field strength. It was main reason of developing the app.
 
 Одним из условий для электромагниной совместимости является не превышение допустимых значений напряженности магнитного поля  около технических средсв, что в рамках проектирования создаёт необходимость выполнения расчётов напряженности магнитного поля. Это было основной причиной создания данного приложения.
 
 electromagnetic compatibility (электромагниной совместимости)
 electromagnetic environment (электромагнитная обстановка)
 
-Требования к данной программе были следующими:
-- расчёт напряженности магнитного поля в заданной горизонтальной плоскости с заданным шагом;
-- расчёт напряженности магнитного поля в заданной вертикальной плоскости с заданным шагом;
-- расчёт напряженности магнитного поля в заданных точках пространства;
-- расчёт наводимых токов в замкнутых контрах любой конфиграции от источников магнитного поля;
-- расчёт собственной и взаимной индуктивности от проводников произвольной формы.
+In this app for calculating of magnetic field strength, self and mutual inductance of free-form conductors and electric circuits is used following mathematical expressions:
 
 В данном приложении для расчёта напряжённости магнитного поля, собственной и взаимной индуктивности от проводников произвольной формы а также расчёта электрических цепей используются следующие математические выражения:
+
 ![Alt Text](.github/images/MCF_formulas.jpg)
+
+How we see, expressions for calculating of magnetic field strength, self and mutual inductance of free-form conductors is integral expressions, that makes volume of calculations very big. So calculating for some area in case lots of sources of magnetic field or calculating self and mutual inductance for lots of elements can spend too much time, that isn't convinient.
+
 Как видно, выражения для расчёта напряжённости магнитного поля, собственной и взаимной индуктивности от проводников произвольной формы являются интегральными выражениями, что значительно увеличивает объём требуемых вычислений. Соотвественно вычисление по какой либо области при множестве источников магнтиного поля или вычисление собственно и взимной индуктивности множества элементов в большинстве случаев занимает длительное время, что достаточно неудобно в использовании.
 
 Поэтому для оптимизации затрат времени испоьзуются вычисления на GPU. Это возможно при использовании GPU от NVIDIA с наличием CUDA ядер, среды разработки для создания высокопроизводительных приложений с ускорением на GPU [CUDA Toolkit](https://developer.nvidia.com/cuda-10.1-download-archive-update2), и пакета [PyTorch](https://pytorch.org/) для тензорных вычислений (например, NumPy) с сильным ускорением от графического процессора. При этом при отсутвии GPU приложение выполняет расчёты на СPU.
@@ -45,15 +48,15 @@ GUI приложения разработан при помощи библиот
 
 ![Alt Text](.github/images/MCF_1.jpg)
 
-Для отбражения результатов расчёта напряжённости магнитного поля для некторой области используем цветовой график который позваляет отображать функции z = f(x, y). Помимо этого в колонке слева можно задать параметры (величину напряженности магнитного поля и цвет линии) для построения линий уровня которые отображают зоны в которых напряжённость магнитного поля превышает заданную величину.
+Для отбражения результатов расчёта напряжённости магнитного поля для некторой области используем библиотеку [Matplotlib](https://pypi.org/project/matplotlib/2.2.2/) при помощи которой создаём цветовой график который позваляет отображать функции z = f(x, y). Помимо этого в колонке слева можно задать параметры (величину напряженности магнитного поля и цвет линии) для построения линий уровня которые отображают зоны в которых напряжённость магнитного поля превышает заданную величину.
 
 ![Alt Text](.github/images/MCF_2.jpg)
 
-При расчёте наводимых токов в замкнутых которах отображене результатов также производится на графике, который показывает геометрическое расположение проводников и модуль тока протекающего в нем, а также имеется цветовая индекация величины тока, котороя отображается при помощи задания цвета линиий.
+Расчёт наводимых токов в замкнутых контурах выполняем при помощи библиотек [Numpy](https://pypi.org/project/numpy/1.15.0/) и [Scipy](https://pypi.org/project/scipy/1.5.4/). Отображене результатов также производится на графике, который показывает геометрическое расположение проводников и модуль тока протекающего в нем, а также имеется цветовая индекация величины тока, котороя отображается при помощи задания цвета линиий.
 
 ![Alt Text](.github/images/MCF_3.jpg)
 
-Ещё одной особенность данного приложения являтеся то, что исходные данные для расчётов можно выгружать из CAD систем при помощи файлов формата *.dxf* а так же возвращать в CAD результаты расчётов. Это достаточно удобно так как вместо ввода координат расположения элементов,  из можно прочитать из файла *.dxf*. А возвражение результатов в CAD системы позваляет отображатать результы расчётов на чертежах без необходимости ввода их вручную.
+Ещё одной особенность данного приложения являтеся то, что исходные данные для расчётов можно выгружать из CAD систем при помощи файлов формата *.dxf* а так же возвращать в CAD результаты расчётов. Для работы *.dxf* файлами используется библиотека [Ezdxf](https://pypi.org/project/ezdxf/0.14.2/). Данный подход достаточно удобен так как вместо ввода координат расположения элементов,  их можно прочитать из файла *.dxf*. А возвражение результатов в CAD системы позваляет отображатать результы расчётов на чертежах без необходимости ввода их вручную.
 
 
 ## Used technologies
@@ -72,11 +75,17 @@ GUI приложения разработан при помощи библиот
 
 
 ## Installation 
-Для того чтобы использовать данное приложение необходимо установить компоненты с раздела [Used technologies](#Used-technologies). Первоначально установите интерпретатор Python, а затем при помощи пакетного менеджера *Pip* установите перечисленные пакеты. При применении версий пакетов отличных от предложенных работоспособность приложения не гарантируется.
-
-For using the application necessity to install components from section [Used technologies](#Used-technologies). First of all install Python interpreter, and after that using package manager *Pip* to install listed packages. In case using versions of packages that differ from the proposed, correct work of the application is not ensured.
+Для того чтобы использовать данное приложение необходимо установить компоненты с раздела [Used technologies](#Used-technologies). Первоначально установите интерпретатор Python и CUDA Toolkit 10.1, а затем при помощи пакетного менеджера *Pip* запустите установку пакетов следующей командой:
 
         pip install -r requirements.txt
+        
+При применении версий пакетов отличных от предложенных работоспособность приложения не гарантируется.
+
+For using the application necessity to install components from section [Used technologies](#Used-technologies). First of all install Python interpreter and CUDA Toolkit 10.1, and after that using package manager *Pip* will run following line:
+
+        pip install -r requirements.txt
+
+In case using versions of packages that differ from the proposed, correct work of the application is not ensured.
 
 
 ## License 
